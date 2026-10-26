@@ -41,7 +41,8 @@ def validate_provenance(root, entries):
     known = {}
     for entry in entries:
         require(isinstance(entry, dict) and set(entry) == {'path', 'kind', 'source', 'locator', 'derived_from'},
-                'Use addons/data_analysis/templates/provenance.json fields')
+                'Provenance entries need exactly path, kind, source, locator, derived_from '
+                '(addons/data_analysis/templates/provenance.json); one entry per exact file path, no globs')
         require(isinstance(entry['path'], str), 'Provenance path must be text')
         data_path(root, entry['path'])
         require(entry['path'] == Path(entry['path']).as_posix(), 'Use canonical data paths without ./ prefixes')
@@ -120,7 +121,10 @@ def validate_settings(settings, root=None):
             data_path(root, spec['path'])
         require(spec['path'] not in seen, 'Duplicate dataset path; use phase both')
         seen.add(spec['path'])
-        require(spec['phase'] in PHASES | {'both'} and spec['format'] in FORMATS, 'Unsupported phase/format')
+        require(spec['phase'] in PHASES | {'both'},
+                f"{spec['path']}: unsupported phase {spec['phase']!r}; use one of {', '.join(sorted(PHASES | {'both'}))}")
+        require(spec['format'] in FORMATS,
+                f"{spec['path']}: unsupported format {spec['format']!r}; use one of {', '.join(sorted(FORMATS))}")
         require(isinstance(spec['purpose'], str) and spec['purpose'].strip(), 'Dataset purpose is required')
         require(type(spec['required']) is bool, 'Dataset required must be boolean')
         require(type(spec['min_records']) is int and spec['min_records'] >= 1, 'min_records must be positive')

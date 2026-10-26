@@ -139,6 +139,11 @@ role: from the Claude hook's `agent_type`, from `--role`, or from `WORKFLOW_ROLE
 | Journal only grows; no data contents or `.env` in Git | `githooks/pre-commit` |
 | Board, claims, and resume packet after compaction | Claude `SessionStart` |
 
+Claude Code loads `.claude/settings.json` (the hooks and `WORKFLOW_AGENT=claude`)
+only when the session starts in the project root. In a session rooted elsewhere,
+nothing fires: export `WORKFLOW_AGENT`, and call `workflow.py guard edit|bash`
+yourself before writes.
+
 Other tools can call the same checks: `workflow.py guard edit --path P`,
 `guard bash --command C`, `guard session`, or `guard hook` with Claude-style JSON
 on stdin (exit 2 means deny or ask). If your Codex version supports hooks, point

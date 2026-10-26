@@ -202,7 +202,9 @@ def validate_config(c):
     for key in ('raw_policy', 'git_policy'):
         require(c['data'][key] == template['data'][key], 'Preserve required data policies')
     v = c['validation']
-    require(all(strings(command) and command for command in v['commands']), 'Commands must be nonempty argument arrays')
+    require(all(strings(command) and command for command in v['commands']),
+            'config.validation.commands: each command is a nonempty argument array, '
+            'e.g. [["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]]')
     require(1 <= v['timeout_seconds'] <= 3600, 'Timeout must be 1..3600 seconds')
     require(v['diagnostics'] in ('off', 'summary'), 'Diagnostics must be off or summary')
     require(1 <= v['summary_max_chars'] <= 10000, 'Summary limit must be 1..10000 characters')
@@ -392,7 +394,8 @@ def handoff_input(path):
     for key in FIELDS:
         require(strings(h[key]) if key in ('files', 'memories') else text(h[key]), f'Invalid handoff field: {key}')
     for ref in h['files'] + h['memories']:
-        require(local(ref).is_file(), f'Handoff reference missing: {ref}')
+        require(local(ref).is_file(), f'Handoff reference missing: {ref} (files and memories must be existing '
+                'project-relative file paths, e.g. memories/features/T001-memories-<stamp>.json from workflow.py show)')
     return h
 
 
@@ -446,7 +449,8 @@ def analysis_gate(task, config, state, phase):
     else:
         task['status'] = 'analyzing'
         assignment(task, 'analyzer', ref)
-        print(f'{phase} analysis required; give the analyzer its focused context and record analysis-report.')
+        print(f'{phase} analysis required; give the analyzer its focused context and record analysis-report. '
+              f'A passing report resumes {task["id"]} automatically; do not run start again.')
     save(state)
     return False
 
@@ -477,6 +481,7 @@ def analysis_report(task, config, state, args):
         task['data_question'] = None
         if resume == 'building':
             assignment(task, 'builder', ref)
+        print(f'{task["id"]} resumed: {resume} (claim: {task["claim"]["agent"] if task.get("claim") else "none"})')
 
 
 def run_checks(config):
@@ -582,6 +587,7 @@ def parser():
     sub = p.add_subparsers(dest='command', required=True)
     add = lambda name: sub.add_parser(name, parents=[common])
     c = add('configure'); c.add_argument('--config', required=True); c.add_argument('--approved', action='store_true')
+    c.add_argument('--assumed', help='File listing open items approved as their stated defaults (recorded in the journal)')
     c = add('add'); c.add_argument('--title', required=True); c.add_argument('--criterion', action='append', required=True); c.add_argument('--depends', action='append', default=[]); c.add_argument('--prompt', required=True)
     c.add_argument('--path', action='append', required=True, help='Glob of files this task may change (repeatable)')
     c.add_argument('--data', choices=['auto', 'expected', 'none'])
@@ -820,6 +826,7 @@ def dispatch(args):
         decision_journal.load(ROOT)
         c = read(args.config); validate_config(c)
         require(not (ROOT / '.workflow/config.json').exists(), 'Already configured; review a migration before reconfiguration')
+        assumed = ' '.join(body(args.assumed).split()) if args.assumed else 'none listed'
         for name, content in guidance(c).items():
             write(ROOT / name, content)
         dump(ROOT / '.workflow/config.json', c)
@@ -828,7 +835,8 @@ def dispatch(args):
         prune(removals)
         generated = roles.sync(ROOT, roles.configured(ROOT, c)) if claude_enabled(c) else []
         milestone('Initial configuration approved', rationale='Coordinator recorded explicit user approval via configure --approved.',
-                  outcome='Project brief, instructions, and task state initialized. Pruned: ' + (', '.join(removals) or 'nothing'),
+                  outcome='Project brief, instructions, and task state initialized. Pruned: ' + (', '.join(removals) or 'nothing')
+                  + '. Assumed defaults: ' + assumed,
                   evidence=['.workflow/config.json', 'PROJECT.md', 'AGENTS.md'])
         print('Configured. Read PROJECT.md and AGENTS.md. Generated: ' + (', '.join(generated) or 'no Claude subagents'))
         print('Pruned: ' + (', '.join(removals) or 'nothing'))
@@ -923,7 +931,11 @@ def dispatch(args):
             require(reason is None, reason)
         artifact(t, 'prompts', f'Scope paths changed by {AGENT}: {previous} -> {paths}\n', 'md')
     elif cmd == 'start':
-        require(t['status'] == 'planned', 'Only planned tasks can start')
+        require(t['status'] == 'planned', {
+            'analyzing': f'{t["id"]} is waiting for analysis-report; a pass resumes building automatically',
+            'awaiting-data': f'{t["id"]} is waiting for a data answer; use data-resolve',
+            'blocked': f'{t["id"]} is blocked; use unblock',
+        }.get(t['status'], f'{t["id"]} is already {t["status"]}; use context {t["id"]} --role <role>'))
         require(all(x['status'] == 'done' for x in state['tasks'] if x['id'] in t['dependencies']), 'Dependencies incomplete')
         take_claim(t, state, config, args.ttl)
         t['status'] = 'building'

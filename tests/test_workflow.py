@@ -311,5 +311,26 @@ class WorkflowTests(HarnessTestCase):
         self.assertGreater(len(full['entries'][0]['decision']), 160)
 
 
+    def test_messages_name_the_fix(self):
+        self.config['validation']['commands'] = ['python3 -m unittest']
+        self.put('config.json', self.config)
+        result = self.run_cli('validate-config', '--config', 'config.json', success=False)
+        self.assertIn('[["python3", "-m", "unittest"', result.stderr)
+        self.config['validation']['commands'] = [[sys.executable, '-c', 'pass']]
+        self.put('config.json', self.config)
+        self.configure(); self.add(); self.run_cli('start', 'T001')
+        result = self.run_cli('start', 'T001', success=False)
+        self.assertIn('T001 is already building', result.stderr)
+        self.put('handoff.json', dict(json.loads((self.root / 'handoff.json').read_text()), memories=['T001 memory']))
+        result = self.run_cli('handoff', 'T001', '--to', 'reviewer', '--file', 'handoff.json', success=False)
+        self.assertIn('existing project-relative file paths', result.stderr)
+
+    def test_assumed_defaults_are_journaled_at_configure(self):
+        self.put('assumed.md', '- users: data managers\n- add-on: enabled\n')
+        self.run_cli('configure', '--config', 'config.json', '--approved', '--assumed', 'assumed.md')
+        entry = json.loads((self.root / 'logging/journal.jsonl').read_text().splitlines()[0])
+        self.assertIn('Assumed defaults: - users: data managers - add-on: enabled', entry['outcome'])
+
+
 if __name__ == '__main__':
     unittest.main()

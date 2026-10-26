@@ -49,6 +49,12 @@ statistics are Python work.
 
 ## Dataset selection
 
+Inputs must exist before a `pre` inspection can pass. If a task produces its own
+inputs (for example synthetic fixtures), stage them in an approved setup step before
+the task starts, or declare them as `phase: post` datasets. Declare processed and
+generated outputs you want inspected as `post` too; otherwise post analysis is
+skipped.
+
 Use `add ... --data expected` if the request implies inputs should exist. `auto`
 uses relevant configured/discovered data; `none --data-reason '...'` records that
 a task is unrelated. Missing expected data pauses dependent work and asks the
@@ -62,7 +68,8 @@ must overlap requested `--analysis-phase pre`/`post` phases; conflicts are error
 not silently empty selections. With no specs, pre covers raw/ and other input
 folders, while post covers processed/generated. Use specs for different timing.
 
-Supported inspection formats are UTF-8 CSV, JSON, JSONL, text, and Markdown. Other
+Supported inspection formats (the dataset `format` key) are `csv`, `json`, `jsonl`,
+`txt`, and `md` (Markdown), all UTF-8. Other
 formats need approved Python extraction into data/. Inspectors never execute input.
 Strict JSON rejects duplicate keys and nonfinite constants; schema ambiguity must
 be resolved before analysis. Input files are never rewritten.

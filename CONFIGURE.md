@@ -8,11 +8,17 @@ is required; use `none` or `not applicable` explicitly. Then show the brief,
 configuration, proposed changes, and validation plan for explicit approval before
 `configure --config project-config.json --approved`.
 
+End the approval request with an **"Assumed unless you object"** list naming every
+item still open and the default that will apply. A bare "approved" then accepts
+exactly those defaults; an empty list means nothing is assumed. Pass the list with
+`configure ... --assumed assumed.md` so the configuration milestone in the journal
+records it.
+
 | Topic | Ask | Default |
 |---|---|---|
 | Project | Name, purpose, users, scope, exclusions, observable acceptance criteria? | One focused deliverable |
 | Technology | Languages, frameworks, dependencies, environment? | Python for all deterministic components |
-| Data | Sources, sensitivity, size, retention, generated outputs, approved Git fixtures? | raw/ read-only, processed/, generated/; contents ignored; `approved_fixtures: []` |
+| Data | Sources, sensitivity, size, retention, generated outputs, approved Git fixtures? | raw/ read-only, processed/, generated/; contents ignored; `approved_fixtures: []` (configure un-ignores listed fixtures) |
 | Evidence | External data staged under ./data, download approvals, unknown-source handling? | ./data only; explicit download approval; "source unavailable" rather than invention |
 | Data-analysis add-on | Will tasks fetch, consume, or produce datasets that need inspection or an analyzer? | `addons.data_analysis: false`; if true, add the `analysis` section (below) |
 | Roles | Builder/reviewer/tester policies; any custom roles; which runtime plays each? | Three required roles in `agents/`; analyzer and fetcher load with the data add-on |
@@ -23,7 +29,7 @@ configuration, proposed changes, and validation plan for explicit approval befor
 | Prompts and memory | What counts as a major prompt; retention? | Requests, scope changes, assignments; one feature memory per task |
 | Decision journal | Which choices are significant; retrieval budget; exclusions? | Significant choices and milestones; compact latest 20 / 6000 chars; no secrets or raw data |
 | Context | Context size and compaction expectations? | `context.max_chars: 12000`; checkpoint before compaction |
-| Validation | Source roots, test commands, timeout, diagnostics? | Add application dirs to `source_paths`; `timeout_seconds: 60`; diagnostics off |
+| Validation | Source roots, test commands, timeout, diagnostics? | Add application dirs to `source_paths`; `unittest discover -s tests` (fails until the project has a test); `timeout_seconds: 60`; diagnostics off |
 | Approvals | What needs approval beyond the defaults? | Every feature enhancement, substantial fixes, downloads, setup |
 | Delivery | Documentation, deployment, supported environments, definition of done? | Evidence, review, executed tests, memory |
 | Execution boundary | Any component where deterministic vs judgment is unclear? | Clarify first and record in `boundary_decisions` |
@@ -64,6 +70,9 @@ agents, or compact context. Paths, states, and handoff fields are fixed in code.
 Source fingerprints skip data, workflow artifacts, environments, caches, and build
 outputs. Choose source roots that cover everything whose change should invalidate
 a review. Files outside the selection are neither fingerprinted nor claim-checked.
+Running a builder's processor writes to `data/processed/` or `data/generated/`
+outside the task's paths; that is expected (Git ignores data) and is not a scope
+violation. Declare outputs worth inspecting as `post` datasets (add-on).
 
 ## Agents and roles
 
@@ -90,6 +99,11 @@ formats, required columns and column rules, minimum records, size and file limit
 analyzer access (`metadata-only` or `approved-summaries`), profiling (off by
 default), and provenance entries (addons/data_analysis/templates/provenance.json, or
 `[]`). See addons/data_analysis/README.md for the semantics.
+
+Ask which processed or generated outputs should be declared as `post` datasets so
+the analyzer inspects them. A task that creates its own inputs cannot pass a `pre`
+check before they exist: stage the inputs in an approved setup step first, or
+declare them `phase: post`.
 
 ## Updates
 

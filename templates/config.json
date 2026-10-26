@@ -46,7 +46,9 @@
   "memory": "Save a feature memory after each task; record significant decisions and milestones in logging/journal.jsonl; retrieve compact entries by default; retain history in Git",
   "tokens": "Concise outputs; compact at phase boundaries or context pressure after saving a handoff; usage only when exposed",
   "validation": {
-    "commands": [],
+    "commands": [
+      ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+    ],
     "source_paths": [
       "scripts",
       "tests",

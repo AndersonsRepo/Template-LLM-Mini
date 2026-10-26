@@ -449,5 +449,30 @@ class DataAddonTests(HarnessTestCase):
                 self.run_cli('validate-config', '--config', 'config.json', success=False)
 
 
+    def test_format_and_provenance_errors_list_allowed_values(self):
+        spec = json.loads((self.root / 'addons/data_analysis/templates/dataset.json').read_text())
+        spec.update(path='data/raw/protocol.md', format='markdown', required_columns=[])
+        self.config['analysis']['datasets'] = [spec]
+        self.put('config.json', self.config)
+        result = self.run_cli('validate-config', '--config', 'config.json', success=False)
+        self.assertIn("unsupported format 'markdown'; use one of csv, json, jsonl, md, txt", result.stderr)
+        spec['format'] = 'md'
+        self.config['analysis']['provenance'] = [{'path': 'data/raw/*', 'source': 'x', 'locator': 'y', 'derived_from': []}]
+        self.put('config.json', self.config)
+        result = self.run_cli('validate-config', '--config', 'config.json', success=False)
+        self.assertIn('one entry per exact file path', result.stderr)
+
+    def test_passing_analysis_reports_resume_instead_of_restart(self):
+        self.put('data/raw/input.csv', 'id\n1\n')
+        self.configure(); self.add(data='auto')
+        result = self.run_cli('start', 'T001', success=False)
+        self.assertIn('do not run start again', result.stdout)
+        result = self.run_cli('start', 'T001', success=False)
+        self.assertIn('waiting for analysis-report', result.stderr)
+        self.put('analysis.md', 'Findings: fits. Limitations: synthetic.\n')
+        result = self.run_cli('analysis-report', 'T001', '--phase', 'pre', '--verdict', 'pass', '--file', 'analysis.md')
+        self.assertIn('T001 resumed: building (claim: claude)', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

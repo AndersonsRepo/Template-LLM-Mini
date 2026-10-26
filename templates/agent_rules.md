@@ -6,7 +6,9 @@ files (`.workflow/`, `tasks.md`, `handoffs/`, `prompts/logs/`, `memories/`,
 `logging/journal.*`, `.claude/agents/`), changes to `data/raw/` originals, source
 edits without your own live claim, commit-hook bypasses, data/.env/secret commits,
 and journal rewrites. It asks before downloads, new raw files, or secret-like text.
-If a block looks wrong, tell the user; do not work around it.
+If a block looks wrong, tell the user; do not work around it. Claude hooks load
+only when the session starts in the project root; otherwise call
+`workflow.py guard edit|bash` before writes and export `WORKFLOW_AGENT`.
 
 ## Approval and scope
 
@@ -15,8 +17,10 @@ plan and explicit user approval before implementation. Clarify material question
 first. Substantial fixes need approval too; only clear, narrow fixes or maintenance
 that add no functionality may skip the separate plan. Ask when classification is
 uncertain; material scope changes need renewed approval. Agents never approve for
-the user. Read-only work needs no approval. No exception removes task tracking,
-QC, tests, or feature memory.
+the user. Read-only work needs no approval. An approval request that leaves
+questions open must end with an "Assumed unless you object" list; a bare approval
+accepts exactly those defaults and nothing else. No exception removes task
+tracking, QC, tests, or feature memory.
 
 ## Python and models
 
