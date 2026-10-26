@@ -8,17 +8,16 @@ import sys
 import tempfile
 import unittest
 
-SOURCE = Path(__file__).resolve().parents[1]
+SOURCE = Path(__file__).resolve().parents[2]
 
 
 def harness_files(source):
     """Harness source only, never adopted state, datasets, or environments."""
-    names = ['.gitignore', 'AGENTS.md', 'CLAUDE.md', 'README.md', 'CONFIGURE.md',
-             'prompts/template_prompt_initialization.md', '.claude/settings.json']
+    names = ['.gitignore', 'AGENTS.md', 'CLAUDE.md', 'README.md', 'CONFIGURE.md', 'docs/workflow.md',
+             'prompts/template_prompt_initialization.md', '.claude/settings.json', 'tests/.gitkeep']
     for folder in ('scripts', 'templates', 'agents', 'addons', 'githooks'):
         names += [p.relative_to(source).as_posix() for p in (source / folder).rglob('*')
                   if p.is_file() and '__pycache__' not in p.parts]
-    names += [p.relative_to(source).as_posix() for p in (source / 'tests').glob('*.py')]
     names += [f'data/{folder}/.gitkeep' for folder in ('raw', 'processed', 'generated')]
     return [name for name in names if (source / name).is_file()]
 

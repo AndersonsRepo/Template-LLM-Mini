@@ -250,12 +250,12 @@ class PruneTests(HarnessTestCase):
         self.put('docs/template-history/README.md', 'history\n')
         self.config['prune'] = self.ALL
         self.put('config.json', self.config); self.prepare_testing()
-        for ref in ('addons/data_analysis', 'agents/analyzer.md', 'agents/fetcher.md', 'tests/test_data_addon.py',
+        for ref in ('addons/data_analysis', 'agents/analyzer.md', 'agents/fetcher.md',
                     'docs/template-history', 'prompts/template_prompt_initialization.md', 'CONFIGURE.md',
                     'CLAUDE.md', '.claude/settings.json', '.claude/agents'):
             self.assertFalse((self.root / ref).exists(), ref)
         self.assertTrue((self.root / 'agents/builder.md').exists())
-        self.assertFalse((self.root / 'docs').exists())  # Emptied parents are removed too.
+        self.assertTrue((self.root / 'docs/workflow.md').exists())  # Core docs stay; only history goes.
         self.finish(); self.run_cli('check')
         milestone = json.loads(self.run_cli('journal', '--id', 'J000001', '--full').stdout)['entries'][0]
         self.assertIn('addons/data_analysis', milestone['outcome'])

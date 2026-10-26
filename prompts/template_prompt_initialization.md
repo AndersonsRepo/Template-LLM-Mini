@@ -13,7 +13,7 @@ My project:
 - Success criteria: <observable_conditions_for_success>
 
 Read AGENTS.md, templates/agent_rules.md, CONFIGURE.md, and templates/config.json
-before proceeding; use README.md for command details.
+before proceeding; use README.md (setup) and docs/workflow.md for command details.
 
 Run the complete configuration interview: present every topic at once, explain its
 purpose and fixed constraints, prefill answers from the information above for my

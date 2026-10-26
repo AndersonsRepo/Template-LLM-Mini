@@ -1,10 +1,12 @@
 """Data-analysis add-on behavior in isolated template copies."""
 import json
+from pathlib import Path
 import subprocess
 import sys
 import unittest
 
-from harness import HarnessTestCase
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts/tests'))
+from harness import HarnessTestCase  # noqa: E402
 
 
 class DataAddonTests(HarnessTestCase):

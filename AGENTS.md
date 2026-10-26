@@ -17,5 +17,6 @@ configured. Until then:
   "Template cleanup").
 - Use `validate-config` for read-only preflight. Configured projects change their
   configuration only through the `update-config` preview/approval process.
-- Command reference: README.md. Data analysis: addons/data_analysis/README.md
-  (only when that add-on is relevant). Decisions: logging/README.md.
+- Command reference: docs/workflow.md (setup: README.md). Data analysis:
+  addons/data_analysis/README.md (only when that add-on is relevant). Decisions:
+  logging/README.md.

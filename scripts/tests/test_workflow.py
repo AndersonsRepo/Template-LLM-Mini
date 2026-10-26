@@ -455,5 +455,26 @@ class WorkflowTests(HarnessTestCase):
         self.assertIn('Reviewed by: claude-reviewer', (self.root / 'tasks.md').read_text())
 
 
+    def test_configure_writes_project_readme_but_keeps_an_adopted_one(self):
+        self.assertTrue((self.root / 'README.md').read_text().startswith('# template_llm_mini'))
+        self.configure()
+        readme = (self.root / 'README.md').read_text()
+        self.assertTrue(readme.startswith('# Sample\n'))
+        self.assertIn('- Works', readme)
+        self.assertIn('docs/workflow.md', readme)
+        self.assertIn("-c assert 2 + 2 == 4", readme)
+
+    def test_adopted_readme_is_not_overwritten(self):
+        self.put('README.md', '# Existing project\n')
+        self.configure()
+        self.assertEqual((self.root / 'README.md').read_text(), '# Existing project\n')
+
+    def test_self_test_covers_harness_test_folders(self):
+        for folder in ('scripts/tests', 'addons/data_analysis/tests'):
+            self.assertIn(f"'{folder}'", (self.root / 'scripts/workflow.py').read_text())
+            self.assertTrue(list((self.root / folder).glob('test_*.py')), folder)
+        self.assertEqual([p.name for p in (self.root / 'tests').iterdir()], ['.gitkeep'])
+
+
 if __name__ == '__main__':
     unittest.main()

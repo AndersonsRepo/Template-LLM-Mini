@@ -33,7 +33,7 @@ EXCLUDED = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cach
 ROOT_EXCLUDED = {'data', '.workflow', 'handoffs', 'memories', 'logging', 'dist', 'build'}
 # Template components a project may delete once its use case is known (config.prune).
 PRUNABLE = {
-    'data_analysis': ['addons/data_analysis', 'tests/test_data_addon.py', 'tests/test_data_quality.py'],
+    'data_analysis': ['addons/data_analysis'],  # Includes the add-on's tests.
     'template_history': ['docs/template-history'],
     'initialization_primer': ['prompts/template_prompt_initialization.md'],
     'configuration_interview': ['CONFIGURE.md'],
@@ -710,6 +710,7 @@ def parser():
     c = add('journal'); c.add_argument('--task'); c.add_argument('--type', choices=['decision', 'milestone']); c.add_argument('--id'); c.add_argument('--limit', type=int, default=20); c.add_argument('--all', action='store_true'); c.add_argument('--render', action='store_true'); c.add_argument('--full', action='store_true'); c.add_argument('--max-chars', type=int, default=6000)
     add('check')
     add('doctor')
+    add('self-test').add_argument('-v', '--verbose', action='store_true')
     c = add('new'); c.add_argument('dest', help='New project directory (must not exist)')
     c.add_argument('--from', dest='source', help='Template checkout to clone (default: this one)')
     add('validate-config').add_argument('--config', required=True)
@@ -751,6 +752,25 @@ def guidance(config):
         rules += '\n' + (ADDON / 'rules.md').read_text(encoding='utf-8')
     brief = '# Project brief\n\n' + '\n'.join(f'**{key}**: {value}\n' for key, value in config['project'].items())
     return {'AGENTS.md': '# Project agent instructions\n\n' + rules, 'PROJECT.md': brief}
+
+
+TEMPLATE_README = '# template_llm_mini\n'
+
+
+def project_readme(config):
+    """Starting README for a configured project; the project owns it afterwards."""
+    p = config['project']
+    checks = '\n'.join(' '.join(command) for command in config['validation']['commands'])
+    return '\n'.join([
+        f'# {p["name"]}', '', p['purpose'], '',
+        f'- **Users:** {p["users"]}', f'- **Scope:** {p["scope"]}', f'- **Out of scope:** {p["exclusions"]}', '',
+        '## Acceptance criteria', '', *[f'- {criterion}' for criterion in p['acceptance_criteria']], '',
+        '## Working on this project', '',
+        'Agents start with AGENTS.md; Claude Code loads its hooks only when the session starts in this',
+        'directory. Workflow commands: [docs/workflow.md](docs/workflow.md). Task board: tasks.md.',
+        'Decisions: logging/journal.md. Project brief: PROJECT.md.', '',
+        '## Checks', '', '```sh', checks, 'python3 scripts/workflow.py doctor', '```', '',
+        'Generated once by `workflow.py configure` from the approved brief; edit freely.', ''])
 
 
 def install_hooks():
@@ -900,7 +920,9 @@ def require_access(task, cmd):
             'work on your own task or wait for release/expiry')
 
 
-READ_ONLY = {'status', 'show', 'context', 'resume', 'validate-config', 'check', 'doctor', 'new'}
+READ_ONLY = {'status', 'show', 'context', 'resume', 'validate-config', 'check', 'doctor', 'new', 'self-test'}
+# The harness's own tests; project validation commands cover project tests only.
+HARNESS_TESTS = ('scripts/tests', 'addons/data_analysis/tests')
 
 
 def main(argv=None):
@@ -949,6 +971,15 @@ def dispatch(args):
         return 2 if any(level == 'warn' for level, _ in found) else 0
     if cmd == 'new':
         return new_project(args)
+    if cmd == 'self-test':
+        failed = []
+        for folder in [f for f in HARNESS_TESTS if (ROOT / f).is_dir()]:
+            print(f'== {folder}', flush=True)
+            command = [sys.executable, '-m', 'unittest', 'discover', '-s', folder, '-t', folder] + (['-v'] if args.verbose else [])
+            if subprocess.run(command, cwd=ROOT).returncode:
+                failed.append(folder)
+        print('Harness self-test ' + (f'failed: {", ".join(failed)}' if failed else 'passed'))
+        return 2 if failed else 0
     if cmd == 'install-hooks':
         if (ROOT / '.workflow/config.json').exists():
             sync_gitignore(read(ROOT / '.workflow/config.json'))
@@ -963,6 +994,10 @@ def dispatch(args):
         assumed = ' '.join(body(args.assumed).split()) if args.assumed else 'none listed'
         for name, content in guidance(c).items():
             write(ROOT / name, content)
+        readme = ROOT / 'README.md'
+        # Replace only the template's own README; an adopted project's README is kept.
+        if not readme.exists() or readme.read_text(encoding='utf-8').startswith(TEMPLATE_README):
+            write(readme, project_readme(c))
         dump(ROOT / '.workflow/config.json', c)
         sync_gitignore(c)
         save({'schema_version': VERSION, 'tasks': []})

@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-ADDON = Path(__file__).resolve().parents[1] / 'addons/data_analysis'
+ADDON = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ADDON))
 import data_analysis
 import profiling

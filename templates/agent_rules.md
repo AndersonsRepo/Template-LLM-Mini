@@ -50,8 +50,9 @@ retention policies; deleting data needs separate user approval.
 ## Working with other agents
 
 Several agents (for example Claude and Codex) may work side by side. Run every
-workflow mutation through `scripts/workflow.py`; it locks state, so never edit the
-files it owns. Set your identity with `WORKFLOW_AGENT` (or `--agent`).
+workflow mutation through `scripts/workflow.py` (reference: docs/workflow.md); it
+locks state, so never edit the files it owns. Set your identity with
+`WORKFLOW_AGENT` (or `--agent`).
 
 - Register work with `add --path GLOB` (the files the task may change); `start`
   claims it with a lease. `claim`, `heartbeat`, `release`, and `scope` manage claims.
@@ -95,7 +96,8 @@ journal queries (`journal --task`, `--id`, `--full` only when needed). Keep secr
 raw data, and tool chatter out of every artifact.
 
 Changes to conventions, architecture, roles, or workflow must update the shared
-rules, README, configuration interview, role definitions, primer, and tests.
+rules, README, docs/workflow.md, configuration interview, role definitions, primer,
+and tests (harness tests: `workflow.py self-test`).
 
 Configuration changes use `update-config` preview, user approval, then
 `--approved --preview-hash`; never hand-edit state or discard task history.

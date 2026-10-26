@@ -8,7 +8,7 @@ from unittest.mock import patch
 import contextlib
 import io
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import decision_journal as journal
 
 
