@@ -92,20 +92,34 @@ python3 scripts/workflow.py release T002
 ```sh
 python3 scripts/workflow.py context T001 --role builder
 python3 scripts/workflow.py handoff T001 --to reviewer --file handoff.json
-python3 scripts/workflow.py review T001 --verdict pass --file review.md
-python3 scripts/workflow.py handoff T001 --to tester --file handoff.json
+python3 scripts/workflow.py context T001 --role reviewer     # includes review_ref
+python3 scripts/workflow.py review T001 --verdict pass --file review.md --reviewer claude-reviewer
+python3 scripts/workflow.py handoff T001 --to tester --set next_action='Run checks'
 python3 scripts/workflow.py test T001
 python3 scripts/workflow.py memory T001 --file feature-memory.md
-python3 scripts/workflow.py handoff T001 --to coordinator --file handoff.json
+python3 scripts/workflow.py handoff T001 --to coordinator     # attaches the latest memory
 python3 scripts/workflow.py done T001
 python3 scripts/workflow.py check
 ```
 
-Use templates/handoff.json and templates/memory.md. A failed review or test
-invalidates earlier passes and returns the task to building; exceeding
-`handoffs.max_repairs` blocks it for user direction. `block`/`unblock`, `rebuild`,
-`log` (scope changes), and `--depends` cover the rest. Completed tasks are
-immutable; changes need a follow-up task.
+Use templates/handoff.json for the first handoff and templates/memory.md. Later
+handoffs may omit `--file`: they reuse the previous handoff's fields, with
+`--set FIELD=VALUE` overrides (`files`/`memories` take comma-separated paths). Small
+requests can use `add --prompt-text '...'` instead of `--prompt FILE`.
+
+The review report must contain the current `review_ref` from the reviewer context;
+it changes with every build and repair cycle, so a report written against an older
+version is rejected. In `independent` and `cross-agent` modes the reviewer must
+differ from the builder: pass `--reviewer NAME` when the coordinator records a
+subagent's review. Like `--approved`, the name is an assertion that Python records
+but cannot authenticate.
+
+A failed review or test invalidates earlier passes and returns the task to building;
+exceeding `handoffs.max_repairs` blocks it for user direction. `block`/`unblock`,
+`rebuild`, `log` (scope changes), and `--depends` cover the rest. Completed tasks are
+immutable; changes need a follow-up task. A review can pass with deferred findings:
+register them with `add ... --follows T001` (linked, not blocking); `done T001`
+lists open follow-ups.
 
 Review and tests are bound to a fingerprint of `validation.source_paths` plus the
 handoff's files, so later edits invalidate them. Include application source, tests,

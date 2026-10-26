@@ -346,6 +346,7 @@ def invalidate(task, config, repair=False):
     task['cycle'] += 1
     task['repairs'] += int(repair)
     task['review_pass'] = task['test_pass'] = False
+    task['reviewed_by'] = None
     task['snapshot'] = None
     task.pop('previous_status', None)
     task['status'] = 'blocked' if task['repairs'] > config['handoffs']['max_repairs'] else 'building'
@@ -413,7 +414,9 @@ def save(state):
         lines.append('| - | - | - | - | - | - | No tasks yet |')
     for task in state['tasks']:
         lines += ['', f'## {task["id"]}: {cell(task["title"])}', '',
-                  f'Status: {task["status"]} | Repairs: {task["repairs"]} | Built by: {task.get("built_by") or "-"}', '',
+                  f'Status: {task["status"]} | Repairs: {task["repairs"]} | Built by: {task.get("built_by") or "-"}'
+                  f' | Reviewed by: {task.get("reviewed_by") or "-"}'
+                  + (f' | Follows: {task["follows"]}' if task.get('follows') else ''), '',
                   *[f'- {criterion}' for criterion in task['criteria']]]
         if task['analysis_state'] or task.get('data_question'):
             lines += ['', 'Analysis: ' + json.dumps({phase: entry['status'] for phase, entry in task['analysis_state'].items()}),
@@ -436,7 +439,35 @@ def envelope(task, **values):
 
 
 def handoff_input(path):
-    h = read(path)
+    return validate_handoff(read(path))
+
+
+def handoff_payload(task, args):
+    """Handoff fields from --file, or the previous handoff, with --set overrides."""
+    if args.file:
+        h = read(args.file)
+    else:
+        require(task['handoffs'], 'The first handoff needs --file (templates/handoff.json fields)')
+        previous = evidence(task, 'handoffs')
+        h = {key: previous[key] for key in FIELDS}
+        print(f'Reusing handoff fields from {task["handoffs"][-1]}', file=sys.stderr)
+    require(isinstance(h, dict), 'Use templates/handoff.json fields')
+    for item in args.set:
+        key, separator, value = item.partition('=')
+        require(separator and key in FIELDS, f'--set takes FIELD=VALUE with FIELD in: {", ".join(FIELDS)}')
+        h[key] = [ref.strip() for ref in value.split(',') if ref.strip()] if key in ('files', 'memories') else value
+    if args.to == 'coordinator' and task['memories'] and isinstance(h.get('memories'), list):
+        if task['memories'][-1] not in h['memories']:
+            h['memories'] = h['memories'] + [task['memories'][-1]]
+    return validate_handoff(h)
+
+
+def review_ref(task):
+    """Token binding a review report to the reviewed snapshot and cycle."""
+    return digest(f'{task["snapshot"]["hash"]}:{task["cycle"]}'.encode())[:12] if task['snapshot'] else None
+
+
+def validate_handoff(h):
     require(isinstance(h, dict) and set(h) == set(FIELDS), 'Use templates/handoff.json fields')
     for key in FIELDS:
         require(strings(h[key]) if key in ('files', 'memories') else text(h[key]), f'Invalid handoff field: {key}')
@@ -566,7 +597,8 @@ def run_checks(config):
 def task_view(task):
     claim = coord.live_claim(task)
     return {key: task[key] for key in ('id', 'title', 'status', 'criteria', 'dependencies', 'cycle', 'repairs', 'paths')} | {
-        'claim': claim, 'built_by': task.get('built_by'),
+        'claim': claim, 'built_by': task.get('built_by'), 'reviewed_by': task.get('reviewed_by'),
+        'follows': task.get('follows'),
         'data_mode': task['data_mode'], 'analysis': {phase: entry['status'] for phase, entry in task['analysis_state'].items()},
         'pending_question': task.get('data_question'),
         'latest': {kind: task[kind][-1] if task.get(kind) else None for kind in KINDS}}
@@ -579,6 +611,8 @@ def context(task, config, role, limit):
     packet = task_view(task) | {'role': role, 'omitted': [], 'rules': 'AGENTS.md',
                               'validation_stale': bool(task['snapshot']) and task['status'] != 'done' and not fresh(task, config)}
     packet['role_policy'] = roles.policy(definitions[role]) if role != 'coordinator' else None
+    if role == 'reviewer' and task['snapshot']:
+        packet['review_ref'] = review_ref(task)
     packet['role_instruction_ref'] = role_ref(role) if role != 'coordinator' else 'AGENTS.md'
     enabled = data_enabled(config)
     if enabled:
@@ -635,7 +669,9 @@ def parser():
     add = lambda name: sub.add_parser(name, parents=[common])
     c = add('configure'); c.add_argument('--config', required=True); c.add_argument('--approved', action='store_true')
     c.add_argument('--assumed', help='File listing open items approved as their stated defaults (recorded in the journal)')
-    c = add('add'); c.add_argument('--title', required=True); c.add_argument('--criterion', action='append', required=True); c.add_argument('--depends', action='append', default=[]); c.add_argument('--prompt', required=True)
+    c = add('add'); c.add_argument('--title', required=True); c.add_argument('--criterion', action='append', required=True); c.add_argument('--depends', action='append', default=[])
+    c.add_argument('--prompt', help='File with the request'); c.add_argument('--prompt-text', help='The request as text')
+    c.add_argument('--follows', help='Task whose review or result this follows up (does not block)')
     c.add_argument('--path', action='append', required=True, help='Glob of files this task may change (repeatable)')
     c.add_argument('--data', choices=['auto', 'expected', 'none'])
     c.add_argument('--data-reason', default='')
@@ -643,7 +679,7 @@ def parser():
     c.add_argument('--analysis-phase', choices=['pre', 'post'], action='append')
     for name in ('start', 'handoff', 'review', 'test', 'memory', 'done', 'block', 'unblock', 'log', 'checkpoint', 'rebuild', 'show', 'context', 'resume', 'data-check', 'analysis-report', 'data-resolve', 'profile', 'fetch', 'claim', 'release', 'heartbeat', 'scope'):
         c = add(name); c.add_argument('task')
-        if name in ('handoff', 'review', 'memory', 'log', 'block', 'checkpoint', 'rebuild', 'analysis-report', 'data-resolve'):
+        if name in ('review', 'memory', 'log', 'block', 'checkpoint', 'rebuild', 'analysis-report', 'data-resolve'):
             c.add_argument('--file', required=True)
         if name in ('data-check', 'analysis-report', 'profile'):
             c.add_argument('--phase', choices=['pre', 'post'], required=True)
@@ -655,8 +691,12 @@ def parser():
             c.add_argument('--data', choices=['auto', 'expected', 'none'])
         if name == 'review':
             c.add_argument('--verdict', choices=['pass', 'fail'], required=True)
+            c.add_argument('--reviewer', help='Identity of the reviewer (default: the recording agent); an assertion')
         if name == 'handoff':
             c.add_argument('--to', choices=['reviewer', 'tester', 'coordinator'], required=True)
+            c.add_argument('--file', help='Handoff fields (templates/handoff.json); default: reuse the previous handoff')
+            c.add_argument('--set', action='append', default=[], metavar='FIELD=VALUE',
+                           help='Override one field; files/memories take comma-separated paths')
         if name in ('context', 'resume'):
             c.add_argument('--role', default='coordinator')
             c.add_argument('--max-chars', type=int)
@@ -962,6 +1002,10 @@ def dispatch(args):
         decision_journal.load(ROOT)
         require(text(args.title) and strings(args.criterion), 'Title/criteria must not be empty')
         require(set(args.depends) <= {t['id'] for t in state['tasks']}, 'Unknown dependency')
+        require(bool(args.prompt) != bool(args.prompt_text), 'Give the request with exactly one of --prompt or --prompt-text')
+        require(args.follows is None or any(t['id'] == args.follows for t in state['tasks']), 'Unknown --follows task')
+        request = body(args.prompt) if args.prompt else args.prompt_text.strip() + '\n'
+        require(text(request), 'Request cannot be empty')
         paths = [coord.normalize_pattern(p) for p in args.path]
         require(all(source_allowed(p) for p in paths), 'Task paths must be source paths, not data/workflow/generated files')
         if data_enabled(config):
@@ -980,10 +1024,12 @@ def dispatch(args):
                  test_pass=False, snapshot=None, source_files=[], artifacts={}, paths=paths, claim=None,
                  built_by=None, data_mode=mode, data_reason=reason, datasets=datasets,
                  analysis_phases=phases,
-                 analysis_state={}, analysis_pending=None, data_question=None, **{k: [] for k in KINDS})
-        artifact(t, 'prompts', body(args.prompt), 'md'); state['tasks'].append(t)
+                 analysis_state={}, analysis_pending=None, data_question=None, follows=args.follows,
+                 **{k: [] for k in KINDS})
+        artifact(t, 'prompts', request, 'md'); state['tasks'].append(t)
         save(state)
-        milestone('Task created: ' + t['title'], task=t['id'], rationale='A requested feature/task was registered with acceptance criteria.',
+        milestone('Task created: ' + t['title'], task=t['id'], rationale='A requested feature/task was registered with acceptance criteria.'
+                  + (f' Follow-up to {args.follows}.' if args.follows else ''),
                   outcome='Task planned.', evidence=[t['prompts'][0]])
         print(t['id']); return
     matches = [t for t in state['tasks'] if t['id'] == args.task]
@@ -1039,7 +1085,7 @@ def dispatch(args):
             return 2
         assignment(t, 'builder', t['prompts'][0])
     elif cmd == 'handoff':
-        h = handoff_input(args.file); target = args.to
+        h = handoff_payload(t, args); target = args.to
         require((t['status'], target) in (('building', 'reviewer'), ('reviewing', 'tester'), ('testing', 'coordinator')), 'Invalid handoff stage')
         if target == 'reviewer':
             for phase in t['analysis_phases']:
@@ -1062,9 +1108,20 @@ def dispatch(args):
         t['status'] = {'reviewer': 'reviewing', 'tester': 'testing', 'coordinator': 'testing'}[target]
     elif cmd == 'review':
         require(t['status'] == 'reviewing', 'Reviewer handoff required')
-        if config['delegation']['review_mode'] == 'cross-agent':
+        mode = config['delegation']['review_mode']
+        if mode == 'cross-agent':
             require(AGENT != t.get('built_by'), f'cross-agent review: {AGENT} built {t["id"]}; another agent must record the review')
-        artifact(t, 'reviews', encoded(envelope(t, verdict=args.verdict, report=body(args.file))) + '\n')
+        reviewer = coord.current_agent(args.reviewer) if args.reviewer else AGENT
+        if mode in ('independent', 'cross-agent'):
+            require(reviewer != t.get('built_by'), f'{mode} review: {reviewer} built {t["id"]}; pass --reviewer NAME '
+                    'naming the independent reviewer (recorded as an assertion, like --approved)')
+        report = body(args.file)
+        token = review_ref(t)
+        require(token in report, f'The review report must contain the current review_ref from '
+                f'`workflow.py context {t["id"]} --role reviewer` (it changes with each build and cycle)')
+        artifact(t, 'reviews', encoded(envelope(t, verdict=args.verdict, reviewer=reviewer, review_ref=token,
+                                                report=report)) + '\n')
+        t['reviewed_by'] = reviewer
         t['review_pass'] = args.verdict == 'pass'
         if not t['review_pass']:
             invalidate(t, config, repair=True)
@@ -1141,6 +1198,9 @@ def dispatch(args):
     if cmd == 'done':
         milestone('Task completed: ' + t['title'], task=t['id'], rationale='Completion checks accepted current review, tests, memory, and final handoff.',
                   outcome='Task marked done.', evidence=[t['reviews'][-1], t['tests'][-1], t['memories'][-1], t['handoffs'][-1]])
+        open_follow_ups = [x['id'] for x in state['tasks'] if x.get('follows') == t['id'] and x['status'] != 'done']
+        if open_follow_ups:
+            print(f'{t["id"]} done; open follow-ups: {", ".join(open_follow_ups)}')
     if cmd == 'test' and not t['test_pass']:
         return 2
     return 0

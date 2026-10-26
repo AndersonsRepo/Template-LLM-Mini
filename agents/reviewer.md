@@ -18,4 +18,7 @@ are reflected in docs, roles, and tests. Check that significant choices are in t
 journal; a journal status is not proof of approval.
 
 Return actionable findings or a reasoned pass, with the source paths you examined.
+Start the report with the packet's `review_ref: <value>` line; the coordinator
+cannot record a review without it. Mark findings that can be deferred so they can
+become a follow-up task.
 QC is judgment, not proof; edits after review need a fresh review.

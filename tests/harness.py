@@ -97,6 +97,13 @@ class HarnessTestCase(unittest.TestCase):
             args += ['--depends', depends]
         return self.run_cli(*args, agent=agent).stdout.strip()
 
+    def review(self, verdict='pass', task='T001', agent='claude', reviewer='reviewer', success=True):
+        """Record a review citing the current review_ref, as an independent reviewer would."""
+        packet = json.loads(self.run_cli('context', task, '--role', 'reviewer', agent=agent).stdout)
+        self.put('review.md', f'review_ref: {packet["review_ref"]}\nReviewed implementation against Works; no findings.\n')
+        args = ['review', task, '--verdict', verdict, '--file', 'review.md'] + (['--reviewer', reviewer] if reviewer else [])
+        return self.run_cli(*args, agent=agent, success=success)
+
     def handoff(self, target, task='T001', agent='claude'):
         self.run_cli('handoff', task, '--to', target, '--file', 'handoff.json', agent=agent)
 
@@ -109,7 +116,7 @@ class HarnessTestCase(unittest.TestCase):
     def prepare_testing(self):
         self.configure(); self.add(); self.run_cli('start', 'T001')
         self.handoff('reviewer')
-        self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md')
+        self.review()
         self.handoff('tester')
 
     def finish(self):

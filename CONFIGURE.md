@@ -24,7 +24,7 @@ template remote, and approved fixtures.
 | Data-analysis add-on | Will tasks fetch, consume, or produce datasets that need inspection or an analyzer? | `addons.data_analysis: false`; if true, add the `analysis` section (below) |
 | Roles | Builder/reviewer/tester policies; any custom roles; which runtime plays each? | Three required roles in `agents/`; analyzer and fetcher load with the data add-on |
 | Agents | Which assistants work in parallel (Claude, Codex, ...)? Lease length? | `max_concurrency: 2` agents; `lease_minutes: 120` |
-| Review | Independent review, approved same-agent fallback, or cross-agent? | `independent`; `cross-agent` when two assistants are available |
+| Review | Independent review, approved same-agent fallback, or cross-agent? Reviewer identity? | `independent` (reviewer named with `--reviewer`); `cross-agent` when two assistants are available |
 | Handoffs | Repair allowance? | Built-in fields; `max_repairs: 2` |
 | Tasks | Granularity, dependencies, path scopes, done criteria? | One reviewable feature per task with explicit `--path` globs |
 | Prompts and memory | What counts as a major prompt; retention? | Requests, scope changes, assignments; one feature memory per task |
@@ -62,7 +62,8 @@ extra cleanup only through reviewed code changes.
 
 Python and hooks enforce: config types, role definition files, claims and path
 scopes, the state lock, workflow-owned files, read-only raw data, artifact hashes,
-evidence freshness, the repair limit, validation timeouts, commit checks, and (with
+evidence freshness, the review_ref binding, a reviewer named apart from the
+builder, the repair limit, validation timeouts, commit checks, and (with
 the add-on) data inspection gates. Assistant policy covers: approval itself, actual
 delegation and independence, compaction, sensitivity judgments, semantic criteria,
 and keeping application work in Python. Python cannot authenticate approval, launch

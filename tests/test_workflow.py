@@ -13,7 +13,7 @@ class WorkflowTests(HarnessTestCase):
         self.run_cli('done', 'T001', success=False)
         self.run_cli('start', 'T001'); self.handoff('reviewer')
         self.run_cli('test', 'T001', success=False)
-        self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md')
+        self.review()
         self.handoff('tester'); self.run_cli('test', 'T001')
         self.run_cli('done', 'T001', success=False)
         self.run_cli('memory', 'T001', '--file', 'memory.md')
@@ -33,7 +33,7 @@ class WorkflowTests(HarnessTestCase):
         self.put('config.json', self.config); self.configure(); self.add(); self.add('T001')
         self.run_cli('start', 'T002', success=False)
         self.run_cli('start', 'T001'); self.handoff('reviewer')
-        self.run_cli('review', 'T001', '--verdict', 'fail', '--file', 'review.md')
+        self.review('fail')
         self.assertEqual(self.task()['status'], 'blocked')
         self.run_cli('unblock', 'T001', success=False)
 
@@ -41,7 +41,7 @@ class WorkflowTests(HarnessTestCase):
         self.config['validation']['commands'] = [[sys.executable, '-c', 'raise SystemExit(3)']]
         self.put('config.json', self.config); self.configure(); self.add()
         self.run_cli('start', 'T001'); self.handoff('reviewer')
-        self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md')
+        self.review()
         self.handoff('tester'); self.run_cli('test', 'T001', success=False)
         self.assertEqual(self.task()['status'], 'building')
         self.assertFalse(self.task()['review_pass'])
@@ -401,6 +401,58 @@ class WorkflowTests(HarnessTestCase):
         self.run_cli('new', str(dest), success=False)
         self.configure()
         self.assertIn('configured project', self.run_cli('new', str(self.root.parent / 'other'), success=False).stderr)
+
+
+    def test_handoffs_reuse_previous_fields_and_attach_memory(self):
+        self.configure(); self.add(); self.run_cli('start', 'T001')
+        self.run_cli('handoff', 'T001', '--to', 'reviewer', success=False)  # The first handoff needs --file.
+        self.handoff('reviewer'); self.review()
+        self.run_cli('handoff', 'T001', '--to', 'tester', '--set', 'nope=x', success=False)
+        self.run_cli('handoff', 'T001', '--to', 'tester', '--set', 'next_action=Run checks')
+        tester = json.loads((self.root / self.task()['handoffs'][-1]).read_text())
+        self.assertEqual((tester['objective'], tester['next_action']), ('Works', 'Run checks'))
+        self.run_cli('test', 'T001'); self.run_cli('memory', 'T001', '--file', 'memory.md')
+        self.run_cli('handoff', 'T001', '--to', 'coordinator')
+        final = json.loads((self.root / self.task()['handoffs'][-1]).read_text())
+        self.assertEqual(final['memories'], [self.task()['memories'][-1]])
+        self.run_cli('done', 'T001')
+
+    def test_inline_request_text_and_follow_ups(self):
+        self.configure()
+        base = ['add', '--title', 'X', '--criterion', 'Works', '--path', 'example.py']
+        self.run_cli(*base, success=False)
+        self.run_cli(*base, '--prompt', 'prompt.md', '--prompt-text', 'Both', success=False)
+        self.run_cli(*base, '--prompt-text', 'Build the example.')
+        self.assertEqual((self.root / self.task()['prompts'][0]).read_text(), 'Build the example.\n')
+        self.run_cli(*base, '--prompt-text', 'Later', '--follows', 'T009', success=False)
+        self.run_cli(*base[:-1], 'other.py', '--prompt-text', 'Harden it.', '--follows', 'T001')
+        self.assertEqual(self.task(1)['follows'], 'T001')
+        self.assertIn('Follows: T001', (self.root / 'tasks.md').read_text())
+        self.run_cli('start', 'T001'); self.handoff('reviewer'); self.review(); self.handoff('tester')
+        self.run_cli('test', 'T001'); self.run_cli('memory', 'T001', '--file', 'memory.md')
+        self.handoff('coordinator')
+        self.assertIn('open follow-ups: T002', self.run_cli('done', 'T001').stdout)
+        journal = (self.root / 'logging/journal.jsonl').read_text()
+        self.assertIn('Follow-up to T001', journal)
+
+    def test_independent_review_names_reviewer_and_cites_current_ref(self):
+        self.configure(); self.add(); self.run_cli('start', 'T001'); self.handoff('reviewer')
+        result = self.review(reviewer=None, success=False)
+        self.assertIn('pass --reviewer NAME', result.stderr)
+        self.put('review.md', 'Looks fine.\n')
+        result = self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md', '--reviewer', 'reviewer',
+                              success=False)
+        self.assertIn('must contain the current review_ref', result.stderr)
+        stale = json.loads(self.run_cli('context', 'T001', '--role', 'reviewer').stdout)['review_ref']
+        self.review('fail')
+        self.handoff('reviewer')
+        self.put('review.md', f'review_ref: {stale}\n')
+        self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md', '--reviewer', 'reviewer', success=False)
+        self.review(reviewer='claude-reviewer')
+        record = json.loads((self.root / self.task()['reviews'][-1]).read_text())
+        self.assertEqual((record['agent'], record['reviewer']), ('claude', 'claude-reviewer'))
+        self.assertEqual(self.task()['reviewed_by'], 'claude-reviewer')
+        self.assertIn('Reviewed by: claude-reviewer', (self.root / 'tasks.md').read_text())
 
 
 if __name__ == '__main__':

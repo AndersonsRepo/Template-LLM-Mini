@@ -77,7 +77,7 @@ class CoordinationTests(HarnessTestCase):
         self.assertIsNone(self.task()['claim'])
         self.run_cli('claim', 'T001')
         self.handoff('reviewer')
-        self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md')
+        self.review()
         self.handoff('tester'); self.finish()
         self.assertIsNone(self.task()['claim'])
 
@@ -101,8 +101,8 @@ class CoordinationTests(HarnessTestCase):
         self.config['delegation']['review_mode'] = 'cross-agent'
         self.put('config.json', self.config); self.configure(); self.add()
         self.run_cli('start', 'T001', agent='claude'); self.handoff('reviewer', agent='claude')
-        self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md', agent='claude', success=False)
-        self.run_cli('review', 'T001', '--verdict', 'pass', '--file', 'review.md', agent='codex')
+        self.review(agent='claude', reviewer=None, success=False)
+        self.review(agent='codex', reviewer=None)
         review = json.loads((self.root / self.task()['reviews'][-1]).read_text())
         self.assertEqual(review['agent'], 'codex')
 

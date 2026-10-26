@@ -59,12 +59,16 @@ files it owns. Set your identity with `WORKFLOW_AGENT` (or `--agent`).
   and paths read-only to you; pick other work or wait for release or expiry.
 - Check the board (`tasks.md` or `status`) before starting. Use one Git branch or
   worktree per claimed task when agents share a checkout.
-- In `cross-agent` review mode a different agent records the review.
+- In `cross-agent` review mode a different agent records the review. In
+  `independent` mode the coordinator records a subagent's review with
+  `--reviewer NAME`; never name a reviewer that did not do the review.
 
 ## Task flow
 
 Build, then independent QC, then tests, with structured handoffs
-(templates/handoff.json). Workers return reports and proposed handoffs; the agent
+(templates/handoff.json; later handoffs may reuse the previous one with `--set`).
+Review reports cite the current `review_ref`; deferred review findings become
+`add --follows TASK` follow-ups. Workers return reports and proposed handoffs; the agent
 holding the claim runs the workflow commands. Never describe same-agent QC as
 independent; without independent agents, ask for an independent session or
 approval of a same-agent fallback. Stop for user direction at the repair limit.
