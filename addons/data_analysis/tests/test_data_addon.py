@@ -1,7 +1,6 @@
 """Data-analysis add-on behavior in isolated template copies."""
 import json
 from pathlib import Path
-import subprocess
 import sys
 import unittest
 

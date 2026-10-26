@@ -88,8 +88,9 @@ Exit code 2 means failed checks or a pending gate; 1 means a workflow error.
 
 `config.roles` lists the roles (builder, reviewer, and tester are required; add
 your own). Every role, including add-on roles, has `agents/<role>.md`. A role with
-`requires: data_analysis` (analyzer, fetcher) loads automatically when that add-on
-is enabled and is ignored otherwise; do not list it in `config.roles`.
+`requires: data_analysis` (analyzer, fetcher; absent once the add-on is pruned)
+loads automatically when that add-on is enabled and is ignored otherwise; do not
+list it in `config.roles`.
 
 ```yaml
 ---
@@ -166,11 +167,10 @@ by default (latest 20, 6000 characters). See [logging/README.md](../logging/READ
 
 `data/raw/` holds read-only originals, `processed/` transformations, and
 `generated/` synthetic data. Git ignores contents except `.gitkeep` and
-`data.approved_fixtures`. The optional analyzer, the fetcher (pulls from approved
-sources into versioned `data/raw/` folders and parses them into `data/processed/`),
-dataset contracts, provenance, and profiling live in [addons/data_analysis](../addons/data_analysis/README.md);
-enable them with `addons.data_analysis: true` plus an `analysis` section copied
-from `addons/data_analysis/config.json`.
+`data.approved_fixtures`. The optional data-analysis add-on (analyzer, fetcher,
+dataset contracts, provenance, profiling) is documented in
+`addons/data_analysis/README.md` when the project keeps it; enable it with
+`addons.data_analysis: true` plus an `analysis` section copied from its `config.json`.
 
 ## State and evidence
 
@@ -181,6 +181,7 @@ updates are not one transaction.
 ## Validate
 
 Project checks are `validation.commands`, run by `workflow.py test TASK`. The
-harness's own tests live in `scripts/tests/` and `addons/data_analysis/tests/`; run
-them with `workflow.py self-test` when harness files change. They use isolated
-temporary copies and make no provider calls.
+harness's own tests live in `scripts/tests/` (plus `addons/data_analysis/tests/`
+when kept); run them with `workflow.py self-test` when harness files change. They
+use isolated temporary copies, make no provider calls, and skip add-on cases once
+the add-on is pruned.

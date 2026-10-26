@@ -95,9 +95,9 @@ the claim holder records them. Supersede instead of rewriting. Prefer compact
 journal queries (`journal --task`, `--id`, `--full` only when needed). Keep secrets,
 raw data, and tool chatter out of every artifact.
 
-Changes to conventions, architecture, roles, or workflow must update the shared
-rules, README, docs/workflow.md, configuration interview, role definitions, primer,
-and tests (harness tests: `workflow.py self-test`).
+Changes to conventions, architecture, roles, or workflow must update every place
+that states them: these rules, README, docs/workflow.md, role definitions, tests
+(harness tests: `workflow.py self-test`), and CONFIGURE.md or the primer if kept.
 
 Configuration changes use `update-config` preview, user approval, then
 `--approved --preview-hash`; never hand-edit state or discard task history.

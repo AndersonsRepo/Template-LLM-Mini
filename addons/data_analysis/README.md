@@ -69,8 +69,7 @@ not silently empty selections. With no specs, pre covers raw/ and other input
 folders, while post covers processed/generated. Use specs for different timing.
 
 Supported inspection formats (the dataset `format` key) are `csv`, `json`, `jsonl`,
-`txt`, and `md` (Markdown), all UTF-8. Other
-formats need approved Python extraction into data/. Inspectors never execute input.
+`txt`, and `md` (Markdown), all UTF-8. Other formats need approved Python extraction into data/. Inspectors never execute input.
 Strict JSON rejects duplicate keys and nonfinite constants; schema ambiguity must
 be resolved before analysis. Input files are never rewritten.
 
@@ -133,12 +132,7 @@ recorded summary contents, even if profiling used to be enabled.
 
 ## Provenance and versions
 
-All external evidence is read from data/; downloading into it needs explicit approval.
-Use data/raw/ for read-only originals, processed/ for transformations, and generated/
-for synthetic/model datasets. Git ignores contents except explicit approved fixtures.
-Code, instructions, and internal workflow evidence remain readable normally.
-
-Record known source, locator, and derived_from entries using templates/provenance.json (in this folder).
+The data layout and evidence rules are in the shared rules (AGENTS.md). Record known source, locator, and derived_from entries using templates/provenance.json (in this folder).
 An empty analysis.provenance list explicitly yields source unavailable. Only declared
 original generated material is exempt; externally derived facts retain attribution
 regardless of output folder. Origin declarations are not independently verified.
@@ -149,7 +143,3 @@ has not changed. Historical manifests remain as recorded. A current parent hash
 is an observation, not proof that the producer used that version. Record production
 inputs with your Python processor when that stronger guarantee is required. Missing,
 unreadable, or oversized parents must have explicit version-status limitations.
-
-Keep factual findings attributable to local files and available locators/origins.
-Say source unavailable for missing provenance and unknown when evidence cannot
-answer. Python checks structures and versions; the reviewer assesses factual support.

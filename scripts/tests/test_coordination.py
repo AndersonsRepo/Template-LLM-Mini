@@ -1,11 +1,10 @@
 """Multi-agent coordination, role definitions, and hook/guard enforcement."""
 from concurrent.futures import ThreadPoolExecutor
 import json
-import subprocess
 import sys
 import unittest
 
-from harness import HarnessTestCase, SOURCE
+from harness import HarnessTestCase, SOURCE, needs_data_addon
 
 sys.path.insert(0, str(SOURCE / 'scripts'))
 import coordination as coord  # noqa: E402
@@ -142,6 +141,7 @@ class RoleTests(HarnessTestCase):
         self.assertIn('Generated from agents/reviewer.md', reviewer)
         self.assertNotIn('Edit', reviewer.split('---')[1])
 
+    @needs_data_addon
     def test_addon_roles_live_in_agents_and_load_only_when_enabled(self):
         self.config['roles'].append('analyzer')
         self.put('config.json', self.config)
@@ -246,6 +246,7 @@ class CommitHookTests(HarnessTestCase):
 class PruneTests(HarnessTestCase):
     ALL = ['data_analysis', 'template_history', 'initialization_primer', 'configuration_interview', 'claude_integration']
 
+    @needs_data_addon
     def test_configure_removes_every_pruned_component_and_workflow_still_runs(self):
         self.put('docs/template-history/README.md', 'history\n')
         self.config['prune'] = self.ALL
@@ -261,6 +262,7 @@ class PruneTests(HarnessTestCase):
         self.assertIn('addons/data_analysis', milestone['outcome'])
         self.run_cli('sync-agents', success=False)
 
+    @needs_data_addon
     def test_prune_names_and_enabled_addon_are_validated(self):
         for prune, enabled in ((['unknown'], False), (['data_analysis'], True), (['template_history'] * 2, False)):
             with self.subTest(prune=prune):
@@ -272,6 +274,7 @@ class PruneTests(HarnessTestCase):
                 self.put('bad.json', config)
                 self.run_cli('validate-config', '--config', 'bad.json', success=False)
 
+    @needs_data_addon
     def test_update_config_previews_removals_before_deleting(self):
         self.configure()
         self.config['prune'] = ['data_analysis', 'configuration_interview']

@@ -76,10 +76,8 @@ Running a builder's processor writes to `data/processed/` or `data/generated/`
 outside the task's paths; that is expected (Git ignores data) and is not a scope
 violation. Declare outputs worth inspecting as `post` datasets (add-on).
 
-The template's own tests live in `scripts/tests/` (and the add-on's in
-`addons/data_analysis/tests/`); run them with `workflow.py self-test` when harness
-files change. Project validation commands cover project tests only and do not run
-`self-test` by default.
+Project validation commands cover project tests only; the harness's own tests run
+with `workflow.py self-test`.
 
 ## Agents and roles
 

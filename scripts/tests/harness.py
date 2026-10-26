@@ -9,6 +9,9 @@ import tempfile
 import unittest
 
 SOURCE = Path(__file__).resolve().parents[2]
+# Configured projects may prune the add-on; its tests then skip instead of failing.
+DATA_ADDON = (SOURCE / 'addons/data_analysis').is_dir()
+needs_data_addon = unittest.skipUnless(DATA_ADDON, 'data-analysis add-on pruned')
 
 
 def harness_files(source):

@@ -4,7 +4,7 @@ import subprocess
 import sys
 import unittest
 
-from harness import HarnessTestCase
+from harness import DATA_ADDON, HarnessTestCase
 
 
 class WorkflowTests(HarnessTestCase):
@@ -456,7 +456,7 @@ class WorkflowTests(HarnessTestCase):
 
 
     def test_configure_writes_project_readme_but_keeps_an_adopted_one(self):
-        self.assertTrue((self.root / 'README.md').read_text().startswith('# template_llm_mini'))
+        self.put('README.md', '# template_llm_mini\n\nTemplate readme.\n')
         self.configure()
         readme = (self.root / 'README.md').read_text()
         self.assertTrue(readme.startswith('# Sample\n'))
@@ -472,7 +472,8 @@ class WorkflowTests(HarnessTestCase):
     def test_self_test_covers_harness_test_folders(self):
         for folder in ('scripts/tests', 'addons/data_analysis/tests'):
             self.assertIn(f"'{folder}'", (self.root / 'scripts/workflow.py').read_text())
-            self.assertTrue(list((self.root / folder).glob('test_*.py')), folder)
+            if folder == 'scripts/tests' or DATA_ADDON:
+                self.assertTrue(list((self.root / folder).glob('test_*.py')), folder)
         self.assertEqual([p.name for p in (self.root / 'tests').iterdir()], ['.gitkeep'])
 
 
