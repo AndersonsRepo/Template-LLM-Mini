@@ -1,0 +1,80 @@
+{
+  "config_version": 1,
+  "project": {
+    "name": "",
+    "purpose": "",
+    "users": "",
+    "scope": "",
+    "exclusions": "",
+    "acceptance_criteria": []
+  },
+  "technology": "",
+  "data": {
+    "usage": "",
+    "sources": "",
+    "sensitivity": "",
+    "expected_size": "",
+    "retention": "",
+    "generated_outputs": "",
+    "approved_git_exceptions": "",
+    "raw_policy": "Read-only originals; transformations go to data/processed/",
+    "git_policy": "Exclude data contents by default; track folder placeholders only; small fixtures require explicit approval",
+    "provenance": []
+  },
+  "roles": [
+    "builder",
+    "reviewer",
+    "tester"
+  ],
+  "delegation": {
+    "capabilities": "",
+    "review_mode": "independent",
+    "max_concurrency": 1
+  },
+  "handoffs": {
+    "policy": "Built-in fields and handoffs/ directory; builder to reviewer to tester",
+    "max_repairs": 2
+  },
+  "tasks": "One reviewable feature per task; built-in states and evidence checks",
+  "prompts": "Log feature requests, material scope changes, and assignments; retain in Git; redact secrets before writing",
+  "memory": "Save durable feature memories after additions; record significant decisions and milestones in logging/journal.jsonl; retrieve compact character-bounded entries by default; full originals only when requested; retain history in Git",
+  "tokens": "Concise outputs; compact at phase boundaries or context pressure after saving a handoff; usage only when exposed",
+  "validation": {
+    "commands": [],
+    "source_paths": [
+      "scripts",
+      "tests",
+      "templates",
+      "prompts/roles",
+      "AGENTS.md",
+      "PROJECT.md",
+      ".gitignore"
+    ],
+    "timeout_seconds": 60,
+    "diagnostics": "off",
+    "summary_max_chars": 2000
+  },
+  "approvals": "",
+  "delivery": "",
+  "execution_boundary": "All deterministic components MUST use Python scripts; models handle judgment only. Clarify ambiguous cases with the user before implementation.",
+  "boundary_decisions": "No unresolved ambiguity",
+  "context": {
+    "max_chars": 12000
+  },
+  "analysis": {
+    "mode": "auto",
+    "phases": [
+      "pre",
+      "post"
+    ],
+    "data_access": "metadata-only",
+    "max_file_bytes": 5000000,
+    "max_files": 100,
+    "datasets": [],
+    "profiling": {
+      "enabled": false,
+      "max_columns": 20,
+      "max_chars": 6000
+    }
+  }
+}

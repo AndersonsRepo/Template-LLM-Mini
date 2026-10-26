@@ -1,0 +1,8 @@
+{
+  "decision": "Describe the significant decision",
+  "rationale": "Explain why it was chosen",
+  "alternatives": [],
+  "outcome": "Expected result, observed result, or pending validation",
+  "status": "accepted",
+  "evidence": []
+}

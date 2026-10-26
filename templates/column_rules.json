@@ -1,0 +1,5 @@
+{
+  "id": {"type": "integer", "nullable": false, "unique": true},
+  "amount": {"type": "number", "nullable": false, "minimum": 0},
+  "event_date": {"type": "date", "nullable": true}
+}

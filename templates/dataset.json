@@ -1,0 +1,12 @@
+{
+  "path": "data/raw/example.csv",
+  "phase": "pre",
+  "format": "csv",
+  "required_columns": [
+    "id"
+  ],
+  "min_records": 1,
+  "purpose": "Replace with the task's expected meaning and use",
+  "required": true,
+  "column_rules": {}
+}

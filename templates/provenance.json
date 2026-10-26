@@ -1,0 +1,7 @@
+{
+  "path": "data/raw/example.csv",
+  "kind": "external",
+  "source": "source unavailable",
+  "locator": "source unavailable",
+  "derived_from": []
+}
