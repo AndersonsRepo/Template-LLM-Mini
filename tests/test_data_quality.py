@@ -5,8 +5,8 @@ import sys
 import tempfile
 import unittest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
-sys.path.insert(0, str(SCRIPTS))
+ADDON = Path(__file__).resolve().parents[1] / 'addons/data_analysis'
+sys.path.insert(0, str(ADDON))
 import data_analysis
 import profiling
 

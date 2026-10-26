@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Standard-library workflow controller; one coordinator owns all writes."""
+"""Standard-library workflow controller. Every mutation runs under a cross-process
+lock; agents (Claude, Codex, ...) claim tasks with path scopes and leases."""
 import argparse
 import difflib
 from datetime import datetime, timezone
@@ -7,23 +8,35 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 
-import data_analysis
-import profiling
+import coordination as coord
 import decision_journal
+import roles
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = 3
+ADDON = ROOT / 'addons/data_analysis'
+VERSION = 4
+CONFIG_VERSION = 2
+AGENT = 'local'  # Set from --agent or WORKFLOW_AGENT in main().
 FIELDS = ('objective', 'files', 'memories', 'decisions', 'changes', 'validation',
           'unresolved', 'next_action')
-KINDS = ('prompts', 'handoffs', 'reviews', 'tests', 'memories', 'checkpoints', 'inspections', 'analyses', 'profiles')
+KINDS = ('prompts', 'handoffs', 'reviews', 'tests', 'memories', 'checkpoints', 'inspections', 'analyses', 'profiles', 'fetches')
 # Never hash datasets, workflow records, environments, or generated caches.
 EXCLUDED = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache',
             '.ruff_cache', 'node_modules'}
 ROOT_EXCLUDED = {'data', '.workflow', 'handoffs', 'memories', 'logging', 'dist', 'build'}
+# Template components a project may delete once its use case is known (config.prune).
+PRUNABLE = {
+    'data_analysis': ['addons/data_analysis', 'tests/test_data_addon.py', 'tests/test_data_quality.py'],
+    'template_history': ['docs/template-history'],
+    'initialization_primer': ['prompts/template_prompt_initialization.md'],
+    'configuration_interview': ['CONFIGURE.md'],
+    'claude_integration': ['CLAUDE.md', '.claude/settings.json', '.claude/agents'],
+}
 
 
 def require(condition, message):
@@ -84,8 +97,70 @@ def source_allowed(ref):
             and Path(ref).suffix not in {'.pyc', '.tmp'})
 
 
+def data_enabled(config):
+    return config['addons']['data_analysis']
+
+
+def da():
+    """The optional data-analysis add-on; imported only when enabled."""
+    require((ADDON / 'data_analysis.py').is_file(), 'Data-analysis add-on is not installed (addons/data_analysis)')
+    if str(ADDON) not in sys.path:
+        sys.path.insert(0, str(ADDON))
+    import data_analysis
+    return data_analysis
+
+
+def fetching():
+    da()
+    import fetching
+    return fetching
+
+
+def source_roots(config):
+    return config['validation']['source_paths'] + (['addons/data_analysis'] if data_enabled(config) else [])
+
+
+def in_sources(config, ref):
+    return source_allowed(ref) and coord.covers(source_roots(config), ref)
+
+
+def role_ref(role):
+    return f'agents/{role}.md'
+
+
+def prune_targets(config):
+    """Existing paths that config.prune deletes, including add-on role definitions."""
+    refs = [ref for name in config['prune'] for ref in PRUNABLE[name]]
+    if 'data_analysis' in config['prune'] and (ROOT / 'agents').is_dir():
+        refs += [path.relative_to(ROOT).as_posix() for path in sorted((ROOT / 'agents').glob('*.md'))
+                 if roles.parse(path)['requires'] == 'data_analysis']
+    return [ref for ref in refs if local(ref).exists()]
+
+
+def prune(refs):
+    for ref in refs:
+        path = local(ref)
+        shutil.rmtree(path) if path.is_dir() else path.unlink()
+        # Drop parents emptied by the removal (e.g. docs/), never the project root.
+        parent = path.parent
+        while parent != ROOT and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+
+
+def claude_enabled(config):
+    return 'claude_integration' not in config['prune']
+
+
 def validate_config(c):
     template = read(ROOT / 'templates/config.json')
+    require(isinstance(c, dict) and isinstance(c.get('addons'), dict) and type(c['addons'].get('data_analysis')) is bool,
+            'config.addons.data_analysis missing; start from templates/config.json (config_version 2)')
+    if c['addons']['data_analysis']:
+        require((ADDON / 'config.json').is_file(), 'Data-analysis add-on is not installed (addons/data_analysis)')
+        template['analysis'] = read(ADDON / 'config.json')
+    empty_ok = ('config.analysis.datasets', 'config.analysis.provenance', 'config.analysis.sources',
+                'config.data.approved_fixtures', 'config.prune')
 
     def structure(actual, expected, location='config'):
         if isinstance(expected, dict):
@@ -99,18 +174,31 @@ def validate_config(c):
         elif type(expected) is int:
             require(type(actual) is int, f'{location}: expected integer')
         elif isinstance(expected, list):
-            require(isinstance(actual, list) and (actual or location in ('config.analysis.datasets', 'config.data.provenance')), f'{location}: expected nonempty list')
+            require(isinstance(actual, list) and (actual or location in empty_ok), f'{location}: expected nonempty list')
     structure(c, template)
-    require(c['config_version'] == 1, 'Unsupported configuration version')
-    data_analysis.validate_settings(c['analysis'], ROOT)
-    profile_settings = c['analysis']['profiling']
-    require(1 <= profile_settings['max_columns'] <= 1000 and 500 <= profile_settings['max_chars'] <= 100000, 'Invalid profiling limits')
-    require(not profile_settings['enabled'] or c['analysis']['data_access'] == 'approved-summaries', 'Profiling requires approved-summaries access')
-    data_analysis.validate_provenance(ROOT, c['data']['provenance'])
+    require(c['config_version'] == CONFIG_VERSION, 'Unsupported configuration version')
+    if data_enabled(c):
+        da().validate_settings(c['analysis'], ROOT)
+        profile_settings = c['analysis']['profiling']
+        require(1 <= profile_settings['max_columns'] <= 1000 and 500 <= profile_settings['max_chars'] <= 100000, 'Invalid profiling limits')
+        require(not profile_settings['enabled'] or c['analysis']['data_access'] == 'approved-summaries', 'Profiling requires approved-summaries access')
+        da().validate_provenance(ROOT, c['analysis']['provenance'])
+        fetching().validate_sources(c['analysis']['sources'], ROOT)
+    require(strings(c['prune']) and len(set(c['prune'])) == len(c['prune']) and set(c['prune']) <= set(PRUNABLE),
+            f'prune entries must be unique names from: {", ".join(PRUNABLE)}')
+    require(not ('data_analysis' in c['prune'] and data_enabled(c)), 'Cannot prune the data_analysis add-on while it is enabled')
+    require(strings(c['data']['approved_fixtures']), 'Approved fixtures must be data/ paths')
+    for ref in c['data']['approved_fixtures']:
+        local(ref)
+        require(Path(ref).parts[0] == 'data', f'Approved fixtures must be under data/: {ref}')
     require(strings(c['project']['acceptance_criteria']), 'Acceptance criteria must be strings')
-    require(c['roles'] == ['builder', 'reviewer', 'tester'], 'Required roles: builder, reviewer, tester')
-    require(c['delegation']['review_mode'] in ('independent', 'approved-same-agent'), 'Unsupported review mode')
+    require(strings(c['roles']) and len(set(c['roles'])) == len(c['roles']), 'Roles must be unique names')
+    require(set(roles.REQUIRED_ROLES) <= set(c['roles']), 'Required roles: builder, reviewer, tester')
+    require('coordinator' not in c['roles'], 'coordinator is implicit; do not list it as a role')
+    roles.configured(ROOT, c)
+    require(c['delegation']['review_mode'] in ('independent', 'approved-same-agent', 'cross-agent'), 'Unsupported review mode')
     require(c['delegation']['max_concurrency'] >= 1 and c['handoffs']['max_repairs'] >= 0, 'Invalid concurrency/repair limit')
+    require(1 <= c['coordination']['lease_minutes'] <= 10080, 'Lease must be 1..10080 minutes')
     for key in ('raw_policy', 'git_policy'):
         require(c['data'][key] == template['data'][key], 'Preserve required data policies')
     v = c['validation']
@@ -149,7 +237,7 @@ def evidence(task, kind):
 
 
 def inspect_phase(task, config, phase):
-    current = data_analysis.scan(ROOT, config, task, phase)
+    current = da().scan(ROOT, config, task, phase)
     entry = task['analysis_state'].get(phase, {})
     if task['data_mode'] == 'none' or not entry.get('inspection'):
         return current
@@ -165,7 +253,7 @@ def inspect_phase(task, config, phase):
         current['files'].extend({'path': ref, 'status': 'missing previously used data'} for ref in vanished)
         current['question'] = ('Previously used data is missing: ' + ', '.join(vanished)
                                + '. Please restore it or explicitly approve a data-scope change. How should dependent work proceed?')
-        return data_analysis.seal(current)
+        return da().seal(current)
     return current
 
 
@@ -178,7 +266,7 @@ def analysis_stale(task, config):
 
 def fingerprint(config, task):
     files = set()
-    for ref in config['validation']['source_paths'] + task['source_files']:
+    for ref in source_roots(config) + task['source_files']:
         path = local(ref)
         require(path.exists(), f'Fingerprint path missing: {ref}')
         candidates = [path]
@@ -258,30 +346,44 @@ def validate_task(task, config, complete=False, live=False):
             require(fresh(task, config), 'Evidence no longer matches working files')
 
 
+def cell(value):
+    return str(value).replace('|', '\\|').replace('\n', ' ')
+
+
 def save(state):
     dump(ROOT / '.workflow/state.json', state)
-    lines = ['# Tasks', '', 'Generated; use workflow.py show/context for focused reads.', '']
+    lines = ['# Task board', '', 'Generated by scripts/workflow.py; never edit. Claim before editing a task\'s paths;',
+             'expired leases may be taken over. Use `workflow.py status` or `show` for focused reads.', '',
+             '| Task | Status | Owner | Lease until (UTC) | Paths | Depends | Title |', '|---|---|---|---|---|---|---|']
     for task in state['tasks']:
-        lines += [f'## {task["id"]}: {task["title"]}', '',
-                  f'Status: {task["status"]} | Repairs: {task["repairs"]}', '',
-                  *[f'- {criterion}' for criterion in task['criteria']], '',
-                  'Dependencies: ' + (', '.join(task['dependencies']) or 'none'), '',
-                  'Analysis: ' + encoded({phase: entry['status'] for phase, entry in task['analysis_state'].items()}), '',
-                  'Data question: ' + (task.get('data_question') or 'none'), '']
-        for kind in KINDS:
-            lines += [kind.title() + ': ' + (', '.join(f'[{Path(p).name}]({p})' for p in task.get(kind, [])) or 'none'), '']
-    write(ROOT / 'tasks.md', '\n'.join(lines))
-    base = ROOT / 'memories/template-index.md'
-    entries = ['# Feature memories', '', 'Load only relevant entries.', '',
-               base.read_text(encoding='utf-8') if base.exists() else '', '\n## Project features\n']
+        claim = coord.live_claim(task)
+        lines.append('| ' + ' | '.join(cell(value) for value in (
+            task['id'], task['status'], claim['agent'] if claim else '-', claim['expires'] if claim else '-',
+            ', '.join(task['paths']), ', '.join(task['dependencies']) or '-', task['title'])) + ' |')
+    if not state['tasks']:
+        lines.append('| - | - | - | - | - | - | No tasks yet |')
+    for task in state['tasks']:
+        lines += ['', f'## {task["id"]}: {cell(task["title"])}', '',
+                  f'Status: {task["status"]} | Repairs: {task["repairs"]} | Built by: {task.get("built_by") or "-"}', '',
+                  *[f'- {criterion}' for criterion in task['criteria']]]
+        if task['analysis_state'] or task.get('data_question'):
+            lines += ['', 'Analysis: ' + json.dumps({phase: entry['status'] for phase, entry in task['analysis_state'].items()}),
+                      '', 'Data question: ' + (task.get('data_question') or 'none')]
+        latest = [f'{kind}: [{Path(task[kind][-1]).name}]({task[kind][-1]})' for kind in KINDS if task.get(kind)]
+        lines += ['', 'Latest evidence: ' + ('; '.join(latest) or 'none')]
+    write(ROOT / 'tasks.md', '\n'.join(lines) + '\n')
+    entries = ['# Feature memories', '', 'Generated; load only relevant entries.', '']
     for task in state['tasks']:
         for ref in task['memories']:
             entries.append(f'- {task["id"]} {task["title"]}: [{Path(ref).name}](../{ref})')
+    if len(entries) == 4:
+        entries.append('No project memories yet.')
     write(ROOT / 'memories/index.md', '\n'.join(entries) + '\n')
 
 
 def envelope(task, **values):
-    return dict(task=task['id'], cycle=task['cycle'], snapshot=task['snapshot']['hash'] if task['snapshot'] else None, **values)
+    return dict(task=task['id'], cycle=task['cycle'], snapshot=task['snapshot']['hash'] if task['snapshot'] else None,
+                agent=AGENT, **values)
 
 
 def handoff_input(path):
@@ -295,7 +397,7 @@ def handoff_input(path):
 
 
 def assignment(task, target, ref):
-    instruction = (f'Read AGENTS.md and prompts/roles/{target}.md; read handoff {ref}; '
+    instruction = (f'Read AGENTS.md and {role_ref(target)}; read handoff {ref}; '
                    'return results to the coordinator without writing workflow state.'
                    if target != 'coordinator' else
                    f'Read AGENTS.md and final handoff {ref}; verify evidence and close the task.')
@@ -410,7 +512,9 @@ def run_checks(config):
 
 
 def task_view(task):
-    return {key: task[key] for key in ('id', 'title', 'status', 'criteria', 'dependencies', 'cycle', 'repairs')} | {
+    claim = coord.live_claim(task)
+    return {key: task[key] for key in ('id', 'title', 'status', 'criteria', 'dependencies', 'cycle', 'repairs', 'paths')} | {
+        'claim': claim, 'built_by': task.get('built_by'),
         'data_mode': task['data_mode'], 'analysis': {phase: entry['status'] for phase, entry in task['analysis_state'].items()},
         'pending_question': task.get('data_question'),
         'latest': {kind: task[kind][-1] if task.get(kind) else None for kind in KINDS}}
@@ -418,13 +522,17 @@ def task_view(task):
 
 def context(task, config, role, limit):
     validate_task(task, config)
+    definitions = roles.configured(ROOT, config)
+    require(role == 'coordinator' or role in definitions, f'Unknown role {role}; configured: {", ".join(definitions)}')
     packet = task_view(task) | {'role': role, 'omitted': [], 'rules': 'AGENTS.md',
                               'validation_stale': bool(task['snapshot']) and task['status'] != 'done' and not fresh(task, config)}
-    packet['analysis_stale'] = analysis_stale(task, config)
-    pending = task.get('analysis_pending')
-    packet['active_analysis'] = pending
-    packet['selected_datasets'] = task['datasets']
-    packet['role_instruction_ref'] = f'prompts/roles/{role}.md' if role != 'coordinator' else 'AGENTS.md'
+    packet['role_policy'] = roles.policy(definitions[role]) if role != 'coordinator' else None
+    packet['role_instruction_ref'] = role_ref(role) if role != 'coordinator' else 'AGENTS.md'
+    enabled = data_enabled(config)
+    if enabled:
+        packet['analysis_stale'] = analysis_stale(task, config)
+        packet['active_analysis'] = task.get('analysis_pending')
+        packet['selected_datasets'] = task['datasets']
     candidates = []
     order = ('inspections', 'analyses', 'handoffs', 'checkpoints', 'reviews', 'tests') if role == 'analyzer' else ('handoffs', 'reviews', 'tests', 'inspections', 'analyses', 'checkpoints')
     for kind in order:
@@ -434,15 +542,19 @@ def context(task, config, role, limit):
                 item = {key: value for key, value in item.items() if key != 'working_snapshot'}
             candidates.append((kind, item))
     if role != 'coordinator':
-        candidates.append(('role_instruction', (ROOT / f'prompts/roles/{role}.md').read_text(encoding='utf-8')))
+        candidates.append(('role_instruction', definitions[role]['body']))
     if role == 'analyzer' and config['analysis']['profiling']['enabled'] and config['analysis']['data_access'] == 'approved-summaries' and task.get('profiles'):
         summary = evidence(task, 'profiles')
         if summary['summary']['data_hash'] == inspect_phase(task, config, summary['phase'])['hash']:
             candidates.insert(2, ('profile', summary))
-    candidates += [('analysis_evidence', task['analysis_state']), ('technology', config['technology']),
-                   ('approvals', config['approvals']), ('delegation', config['delegation']), ('validation', config['validation'])]
+    if enabled:
+        candidates.append(('analysis_evidence', task['analysis_state']))
+    candidates += [('technology', config['technology']), ('approvals', config['approvals']),
+                   ('delegation', config['delegation']), ('validation', config['validation'])]
     if role == 'analyzer':
         candidates.insert(1, ('analysis_policy', {'data_access': config['analysis']['data_access']}))
+    if role == 'fetcher':
+        candidates.insert(0, ('sources', config['analysis']['sources']))
     if task['checkpoints']:
         checkpoint = evidence(task, 'checkpoints')
         try:
@@ -460,20 +572,24 @@ def context(task, config, role, limit):
         del packet[key]
         packet['omitted'].append(key)
     require(len(encoded(packet)) <= limit, 'Core task exceeds context limit; use show or explicitly increase --max-chars')
-    print(encoded(packet))
+    return encoded(packet)
 
 
 def parser():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--agent', help='Agent identity (default: $WORKFLOW_AGENT or local)')
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
-    c = sub.add_parser('configure'); c.add_argument('--config', required=True); c.add_argument('--approved', action='store_true')
-    c = sub.add_parser('add'); c.add_argument('--title', required=True); c.add_argument('--criterion', action='append', required=True); c.add_argument('--depends', action='append', default=[]); c.add_argument('--prompt', required=True)
-    c.add_argument('--data', choices=['auto', 'expected', 'none'], default='auto')
+    add = lambda name: sub.add_parser(name, parents=[common])
+    c = add('configure'); c.add_argument('--config', required=True); c.add_argument('--approved', action='store_true')
+    c = add('add'); c.add_argument('--title', required=True); c.add_argument('--criterion', action='append', required=True); c.add_argument('--depends', action='append', default=[]); c.add_argument('--prompt', required=True)
+    c.add_argument('--path', action='append', required=True, help='Glob of files this task may change (repeatable)')
+    c.add_argument('--data', choices=['auto', 'expected', 'none'])
     c.add_argument('--data-reason', default='')
     c.add_argument('--dataset', action='append', default=[])
     c.add_argument('--analysis-phase', choices=['pre', 'post'], action='append')
-    for name in ('start', 'handoff', 'review', 'test', 'memory', 'done', 'block', 'unblock', 'log', 'checkpoint', 'rebuild', 'show', 'context', 'resume', 'data-check', 'analysis-report', 'data-resolve', 'profile'):
-        c = sub.add_parser(name); c.add_argument('task')
+    for name in ('start', 'handoff', 'review', 'test', 'memory', 'done', 'block', 'unblock', 'log', 'checkpoint', 'rebuild', 'show', 'context', 'resume', 'data-check', 'analysis-report', 'data-resolve', 'profile', 'fetch', 'claim', 'release', 'heartbeat', 'scope'):
+        c = add(name); c.add_argument('task')
         if name in ('handoff', 'review', 'memory', 'log', 'block', 'checkpoint', 'rebuild', 'analysis-report', 'data-resolve'):
             c.add_argument('--file', required=True)
         if name in ('data-check', 'analysis-report', 'profile'):
@@ -489,17 +605,25 @@ def parser():
         if name == 'handoff':
             c.add_argument('--to', choices=['reviewer', 'tester', 'coordinator'], required=True)
         if name in ('context', 'resume'):
-            c.add_argument('--role', choices=['builder', 'reviewer', 'tester', 'coordinator', 'analyzer'], default='coordinator')
+            c.add_argument('--role', default='coordinator')
             c.add_argument('--max-chars', type=int)
-    c = sub.add_parser('decide'); c.add_argument('--file', required=True); c.add_argument('--task'); c.add_argument('--supersedes')
-    c = sub.add_parser('journal'); c.add_argument('--task'); c.add_argument('--type', choices=['decision', 'milestone']); c.add_argument('--id'); c.add_argument('--limit', type=int, default=20); c.add_argument('--all', action='store_true'); c.add_argument('--render', action='store_true'); c.add_argument('--full', action='store_true'); c.add_argument('--max-chars', type=int, default=6000)
-    sub.add_parser('check')
-    sub.add_parser('validate-config').add_argument('--config', required=True)
-    c = sub.add_parser('update-config'); c.add_argument('--config', required=True); c.add_argument('--approved', action='store_true'); c.add_argument('--preview-hash')
-    sub.add_parser('status').add_argument('--all', action='store_true')
+        if name in ('claim', 'heartbeat', 'start'):
+            c.add_argument('--ttl', type=int, help='Lease minutes (default: coordination.lease_minutes)')
+        if name == 'scope':
+            c.add_argument('--path', action='append', required=True)
+        if name == 'fetch':
+            c.add_argument('--source', required=True, help='Name of an approved entry in analysis.sources')
+    c = add('decide'); c.add_argument('--file', required=True); c.add_argument('--task'); c.add_argument('--supersedes')
+    c = add('journal'); c.add_argument('--task'); c.add_argument('--type', choices=['decision', 'milestone']); c.add_argument('--id'); c.add_argument('--limit', type=int, default=20); c.add_argument('--all', action='store_true'); c.add_argument('--render', action='store_true'); c.add_argument('--full', action='store_true'); c.add_argument('--max-chars', type=int, default=6000)
+    add('check')
+    add('validate-config').add_argument('--config', required=True)
+    c = add('update-config'); c.add_argument('--config', required=True); c.add_argument('--approved', action='store_true'); c.add_argument('--preview-hash')
+    add('status').add_argument('--all', action='store_true')
+    add('sync-agents')
+    add('install-hooks')
+    c = add('guard'); c.add_argument('mode', choices=['hook', 'session', 'edit', 'bash', 'commit'])
+    c.add_argument('--path'); c.add_argument('--command', dest='shell_command'); c.add_argument('--content-file'); c.add_argument('--role')
     return p
-
-
 
 
 def report_journal_result(result):
@@ -512,7 +636,7 @@ def report_journal_result(result):
 def milestone(decision, *, rationale, outcome, evidence, task=None):
     return report_journal_result(decision_journal.append(ROOT, kind='milestone', task=task, decision=decision,
                                    rationale=rationale, alternatives=[], outcome=outcome,
-                                   status='recorded', evidence=evidence))
+                                   status='recorded', evidence=evidence, agent=AGENT))
 
 
 def config_changes(old, new, path=''):
@@ -524,33 +648,56 @@ def config_changes(old, new, path=''):
     return [] if old == new else [{'path': path, 'before': old, 'after': new}]
 
 
+def guidance(config):
+    """Generated project instructions: shared rules plus enabled add-on rules, never config values."""
+    rules = (ROOT / 'templates/agent_rules.md').read_text(encoding='utf-8')
+    if data_enabled(config):
+        rules += '\n' + (ADDON / 'rules.md').read_text(encoding='utf-8')
+    brief = '# Project brief\n\n' + '\n'.join(f'**{key}**: {value}\n' for key, value in config['project'].items())
+    return {'AGENTS.md': '# Project agent instructions\n\n' + rules, 'PROJECT.md': brief}
+
+
+def install_hooks():
+    """Point Git at githooks/ so commit checks apply to every agent and human."""
+    try:
+        inside = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'], cwd=ROOT, capture_output=True, text=True)
+    except OSError:
+        return 'Git not available; commit hooks not installed.'
+    if inside.returncode or inside.stdout.strip() != 'true':
+        return 'Not a Git work tree; run `git init` then `workflow.py install-hooks`.'
+    for hook in (ROOT / 'githooks').glob('*'):
+        hook.chmod(hook.stat().st_mode | 0o111)
+    subprocess.run(['git', 'config', 'core.hooksPath', 'githooks'], cwd=ROOT, check=True)
+    return 'Git hooks installed (core.hooksPath=githooks).'
+
+
 def update_config(args):
     candidate = read(args.config)
     validate_config(candidate)
     current = read(ROOT / '.workflow/config.json')
     state = read(ROOT / '.workflow/state.json')
     require(state.get('schema_version') == VERSION, 'State migration required before updating configuration')
-    rules = (ROOT / 'templates/agent_rules.md').read_text(encoding='utf-8')
     changes = config_changes(current, candidate)
     previous_guidance = {name: (ROOT / name).read_text(encoding='utf-8') for name in ('AGENTS.md', 'PROJECT.md')}
-    new_guidance = {'AGENTS.md': '# Project agent instructions\n\n' + rules,
-                    'PROJECT.md': '# Project brief\n\n' + '\n'.join(f'**{key}**: {value}\n' for key, value in candidate['project'].items())}
+    new_guidance = guidance(candidate)
     guidance_changes = {name: ''.join(difflib.unified_diff(previous_guidance[name].splitlines(True),
                         new_guidance[name].splitlines(True), fromfile=name, tofile=name))
                         for name in previous_guidance if previous_guidance[name] != new_guidance[name]}
     preview_hash = digest(json.dumps({'current': current, 'state': state, 'candidate': candidate,
-                                     'rules': rules, 'previous_guidance': previous_guidance}, sort_keys=True).encode())
+                                     'new_guidance': new_guidance, 'previous_guidance': previous_guidance}, sort_keys=True).encode())
     affected = [task['id'] for task in state['tasks'] if task['status'] != 'done'] if changes or guidance_changes else []
+    enabled = data_enabled(candidate)
     conflicts = []
     for task in state['tasks']:
-        if task['status'] != 'done':
+        if task['status'] != 'done' and enabled and task['data_mode'] != 'none':
             try:
-                data_analysis.validate_selection(ROOT, candidate['analysis'], task['datasets'], task['analysis_phases'])
+                da().validate_selection(ROOT, candidate['analysis'], task['datasets'], task['analysis_phases'])
             except ValueError as exc:
                 conflicts.append({'task': task['id'], 'issue': str(exc)})
-    data_scope_changed = (current.get('analysis', {}).get('datasets') != candidate['analysis']['datasets'])
+    data_scope_changed = (current.get('analysis', {}).get('datasets') != candidate.get('analysis', {}).get('datasets'))
+    removals = prune_targets(candidate)
     preview = {'preview_hash': preview_hash, 'changes': changes, 'affected_tasks': affected,
-               'guidance_changes': guidance_changes,
+               'guidance_changes': guidance_changes, 'removals': removals,
                'data_scope_changed': data_scope_changed,
                'conflicts': conflicts, 'action': 'Active evidence will be invalidated; completed history is preserved.'}
     if not args.approved:
@@ -559,7 +706,7 @@ def update_config(args):
         return 0
     require(args.preview_hash == preview_hash, 'Missing/stale preview hash; preview again and obtain approval')
     require(not conflicts, 'Resolve task selection/phase conflicts before applying this update')
-    if not changes and not guidance_changes:
+    if not changes and not guidance_changes and not removals:
         print('Configuration unchanged; no writes made.')
         return 0
     decision_journal.load(ROOT)
@@ -580,8 +727,11 @@ def update_config(args):
         previous_question = task.get('data_question')
         invalidate(task, candidate)
         task['status'] = 'planned' if planned else task['status']
-        task['datasets'] = data_analysis.validate_selection(ROOT, candidate['analysis'], task['datasets'], task['analysis_phases'])
-        if data_scope_changed:
+        if not enabled:
+            task.update(data_mode='none', data_reason='Data-analysis add-on disabled', datasets=[], analysis_phases=[])
+        elif task['data_mode'] != 'none':
+            task['datasets'] = da().validate_selection(ROOT, candidate['analysis'], task['datasets'], task['analysis_phases'])
+        if data_scope_changed or not enabled:
             task['analysis_state'] = {}
         else:
             # Keep inspected file references so an unrelated config edit cannot
@@ -590,7 +740,7 @@ def update_config(args):
                 entry['status'] = 'unreviewed'
         task['analysis_pending'] = None
         task['data_question'] = None
-        if not data_scope_changed and paused and previous_pending:
+        if enabled and not data_scope_changed and paused and previous_pending:
             task['status'] = previous_status
             task['analysis_pending'] = previous_pending | {'resume_status': 'building'}
             task['data_question'] = previous_question
@@ -598,6 +748,9 @@ def update_config(args):
     dump(ROOT / '.workflow/config.json', candidate)
     for name, content in new_guidance.items():
         write(ROOT / name, content)
+    prune(removals)
+    if claude_enabled(candidate):
+        roles.sync(ROOT, roles.configured(ROOT, candidate))
     save(state)
     record = read(revision); record['status'] = 'applied'; dump(revision, record)
     milestone('Configuration update applied', rationale='Coordinator recorded approval of the matching configuration preview.',
@@ -606,8 +759,38 @@ def update_config(args):
     return 0
 
 
-def main():
-    args = parser().parse_args()
+def take_claim(task, state, config, minutes=None):
+    reason = coord.claim_conflicts(state, task, AGENT, config['delegation']['max_concurrency'])
+    require(reason is None, reason)
+    task['claim'] = coord.new_claim(AGENT, minutes or config['coordination']['lease_minutes'])
+
+
+def require_access(task, cmd):
+    """Another agent's live claim makes a task read-only, except for cross-agent review."""
+    claim = coord.live_claim(task)
+    require(not claim or claim['agent'] == AGENT or cmd == 'review',
+            f'{task["id"]} is claimed by {claim["agent"] if claim else ""} until {claim["expires"] if claim else ""}; '
+            'work on your own task or wait for release/expiry')
+
+
+READ_ONLY = {'status', 'show', 'context', 'resume', 'validate-config', 'check'}
+
+
+def main(argv=None):
+    global AGENT
+    args = parser().parse_args(argv)
+    AGENT = coord.current_agent(args.agent)
+    if args.command == 'guard':
+        import guard
+        return guard.run(args, AGENT)
+    if (args.command in READ_ONLY or (args.command == 'journal' and not args.render)
+            or (args.command == 'update-config' and not args.approved)):
+        return dispatch(args)
+    with coord.locked(ROOT):
+        return dispatch(args)
+
+
+def dispatch(args):
     cmd = args.command
     if cmd == 'journal':
         require(args.limit > 0, 'Journal limit must be positive')
@@ -623,10 +806,13 @@ def main():
         if args.task:
             state = read(ROOT / '.workflow/state.json')
             require(state.get('schema_version') == VERSION and any(t['id'] == args.task for t in state['tasks']), 'Unknown task')
-        print(report_journal_result(decision_journal.append(ROOT, kind='decision', task=args.task, supersedes=args.supersedes, **payload)))
+        print(report_journal_result(decision_journal.append(ROOT, kind='decision', task=args.task, supersedes=args.supersedes,
+                                                            agent=AGENT, **payload)))
         return
     if cmd == 'validate-config':
         validate_config(read(args.config)); print('Configuration valid; no changes made.'); return
+    if cmd == 'install-hooks':
+        print(install_hooks()); return
     if cmd == 'update-config':
         return update_config(args)
     if cmd == 'configure':
@@ -634,22 +820,34 @@ def main():
         decision_journal.load(ROOT)
         c = read(args.config); validate_config(c)
         require(not (ROOT / '.workflow/config.json').exists(), 'Already configured; review a migration before reconfiguration')
-        rules = (ROOT / 'templates/agent_rules.md').read_text(encoding='utf-8')
-        brief = '# Project brief\n\n' + '\n'.join(f'**{k}**: {v}\n' for k, v in c['project'].items())
-        write(ROOT / 'PROJECT.md', brief)
-        write(ROOT / 'AGENTS.md', '# Project agent instructions\n\n' + rules)
+        for name, content in guidance(c).items():
+            write(ROOT / name, content)
         dump(ROOT / '.workflow/config.json', c)
         save({'schema_version': VERSION, 'tasks': []})
+        removals = prune_targets(c)
+        prune(removals)
+        generated = roles.sync(ROOT, roles.configured(ROOT, c)) if claude_enabled(c) else []
         milestone('Initial configuration approved', rationale='Coordinator recorded explicit user approval via configure --approved.',
-                  outcome='Project brief, instructions, and task state initialized.', evidence=['.workflow/config.json', 'PROJECT.md', 'AGENTS.md'])
-        print('Configured. Read PROJECT.md and AGENTS.md.'); return
+                  outcome='Project brief, instructions, and task state initialized. Pruned: ' + (', '.join(removals) or 'nothing'),
+                  evidence=['.workflow/config.json', 'PROJECT.md', 'AGENTS.md'])
+        print('Configured. Read PROJECT.md and AGENTS.md. Generated: ' + (', '.join(generated) or 'no Claude subagents'))
+        print('Pruned: ' + (', '.join(removals) or 'nothing'))
+        print(install_hooks()); return
     config = read(ROOT / '.workflow/config.json'); validate_config(config)
     state = read(ROOT / '.workflow/state.json')
     require(state.get('schema_version') == VERSION, 'Old state schema; explicit migration required (do not overwrite history)')
+    if cmd == 'sync-agents':
+        require(claude_enabled(config), 'claude_integration is pruned; nothing to generate')
+        print('\n'.join(roles.sync(ROOT, roles.configured(ROOT, config))) or 'No Claude subagents (all roles are codex-only).'); return
     if cmd == 'status':
         print(encoded([task_view(t) for t in state['tasks'] if args.all or t['status'] != 'done'])); return
     if cmd == 'check':
         decision_journal.load(ROOT)
+        claimed = [t for t in state['tasks'] if coord.live_claim(t)]
+        for index, first in enumerate(claimed):
+            for second in claimed[index + 1:]:
+                require(first['claim']['agent'] == second['claim']['agent'] or not coord.overlaps(first['paths'], second['paths']),
+                        f'{first["id"]} and {second["id"]}: overlapping live claims held by different agents')
         for t in state['tasks']:
             validate_task(t, config, complete=t['status'] == 'done')
             require(not analysis_stale(t, config), f'{t["id"]}: analysis inspection is stale; run data-check')
@@ -660,14 +858,23 @@ def main():
         decision_journal.load(ROOT)
         require(text(args.title) and strings(args.criterion), 'Title/criteria must not be empty')
         require(set(args.depends) <= {t['id'] for t in state['tasks']}, 'Unknown dependency')
-        require(args.data != 'none' or text(args.data_reason), 'Explain why this task does not involve data')
-        phases = [phase for phase in ('pre', 'post') if phase in (args.analysis_phase or config['analysis']['phases'])]
-        datasets = data_analysis.validate_selection(ROOT, config['analysis'], args.dataset, phases)
-        require(args.data != 'none' or not datasets, 'A no-data task cannot select datasets')
+        paths = [coord.normalize_pattern(p) for p in args.path]
+        require(all(source_allowed(p) for p in paths), 'Task paths must be source paths, not data/workflow/generated files')
+        if data_enabled(config):
+            mode = args.data or 'auto'
+            require(mode != 'none' or text(args.data_reason), 'Explain why this task does not involve data')
+            phases = [phase for phase in ('pre', 'post') if phase in (args.analysis_phase or config['analysis']['phases'])]
+            datasets = da().validate_selection(ROOT, config['analysis'], args.dataset, phases)
+            require(mode != 'none' or not datasets, 'A no-data task cannot select datasets')
+            reason = args.data_reason
+        else:
+            require(args.data in (None, 'none') and not args.dataset and not args.analysis_phase,
+                    'Data options need addons.data_analysis enabled in an approved configuration')
+            mode, phases, datasets, reason = 'none', [], [], args.data_reason or 'Data-analysis add-on disabled'
         t = dict(id=f'T{len(state["tasks"]) + 1:03}', title=args.title, criteria=args.criterion,
                  dependencies=args.depends, status='planned', repairs=0, cycle=0, review_pass=False,
-                 test_pass=False, snapshot=None, source_files=[], artifacts={}, data_mode=args.data,
-                 data_reason=args.data_reason, datasets=datasets,
+                 test_pass=False, snapshot=None, source_files=[], artifacts={}, paths=paths, claim=None,
+                 built_by=None, data_mode=mode, data_reason=reason, datasets=datasets,
                  analysis_phases=phases,
                  analysis_state={}, analysis_pending=None, data_question=None, **{k: [] for k in KINDS})
         artifact(t, 'prompts', body(args.prompt), 'md'); state['tasks'].append(t)
@@ -682,8 +889,12 @@ def main():
     if cmd in ('context', 'resume'):
         limit = config['context']['max_chars'] if args.max_chars is None else args.max_chars
         require(2000 <= limit <= 100000, 'Context limit must be 2000..100000 characters')
-        context(t, config, args.role, limit); return
+        print(context(t, config, args.role, limit)); return
     require(t['status'] != 'done' or cmd == 'log', 'Completed tasks are immutable; create a follow-up')
+    if cmd in ('data-check', 'analysis-report', 'data-resolve', 'profile', 'fetch'):
+        require(data_enabled(config), 'Data commands need addons.data_analysis enabled')
+    if cmd != 'claim':
+        require_access(t, cmd)
     validate_task(t, config)
     decision_journal.load(ROOT)
     if cmd in ('review', 'test', 'memory', 'done') and t['status'] in ('reviewing', 'testing'):
@@ -693,9 +904,28 @@ def main():
     if cmd in ('review', 'test', 'memory', 'done') or (cmd == 'handoff' and args.to != 'reviewer'):
         if t['snapshot']:
             ensure_fresh(t, config, state)
-    if cmd == 'start':
+    if cmd == 'claim':
+        take_claim(t, state, config, args.ttl)
+        print(f'{t["id"]} claimed by {AGENT} until {t["claim"]["expires"]}')
+    elif cmd == 'heartbeat':
+        require(t.get('claim') and t['claim']['agent'] == AGENT, f'{AGENT} does not hold the claim on {t["id"]}')
+        take_claim(t, state, config, args.ttl)
+        print(f'{t["id"]} lease extended until {t["claim"]["expires"]}')
+    elif cmd == 'release':
+        require(coord.live_claim(t), f'{t["id"]} has no live claim')
+        t['claim'] = None
+    elif cmd == 'scope':
+        paths = [coord.normalize_pattern(p) for p in args.path]
+        require(all(source_allowed(p) for p in paths), 'Task paths must be source paths')
+        previous = t['paths']; t['paths'] = paths
+        if coord.live_claim(t):
+            reason = coord.claim_conflicts(state, t, AGENT, config['delegation']['max_concurrency'])
+            require(reason is None, reason)
+        artifact(t, 'prompts', f'Scope paths changed by {AGENT}: {previous} -> {paths}\n', 'md')
+    elif cmd == 'start':
         require(t['status'] == 'planned', 'Only planned tasks can start')
         require(all(x['status'] == 'done' for x in state['tasks'] if x['id'] in t['dependencies']), 'Dependencies incomplete')
+        take_claim(t, state, config, args.ttl)
         t['status'] = 'building'
         if 'pre' in t['analysis_phases'] and not analysis_gate(t, config, state, 'pre'):
             return 2
@@ -708,8 +938,12 @@ def main():
                 if not analysis_gate(t, config, state, phase):
                     return 2
             require(all(source_allowed(ref) for ref in h['files']), 'Use source files, not datasets/generated artifacts, in files')
+            outside = [ref for ref in h['files'] if not coord.covers(t['paths'], ref)]
+            if outside:
+                print(f'Warning: handoff files outside {t["id"]} paths (reference-only?): {", ".join(outside)}', file=sys.stderr)
             t['source_files'] = h['files']
             t['snapshot'] = fingerprint(config, t)
+            t['built_by'] = AGENT
         else:
             require(t['review_pass'], 'Passing review required')
             require(all(ref in t['snapshot']['files'] for ref in h['files']), 'New source reference needs rebuild and review')
@@ -720,6 +954,8 @@ def main():
         t['status'] = {'reviewer': 'reviewing', 'tester': 'testing', 'coordinator': 'testing'}[target]
     elif cmd == 'review':
         require(t['status'] == 'reviewing', 'Reviewer handoff required')
+        if config['delegation']['review_mode'] == 'cross-agent':
+            require(AGENT != t.get('built_by'), f'cross-agent review: {AGENT} built {t["id"]}; another agent must record the review')
         artifact(t, 'reviews', encoded(envelope(t, verdict=args.verdict, report=body(args.file))) + '\n')
         t['review_pass'] = args.verdict == 'pass'
         if not t['review_pass']:
@@ -741,12 +977,21 @@ def main():
         require(t['status'] == 'testing', 'Task must be in testing')
         validate_task(t, config, complete=True, live=True)
         t['status'] = 'done'
+        t['claim'] = None
     elif cmd == 'profile':
         require(t['status'] in ('building', 'analyzing', 'awaiting-data', 'reviewing', 'testing'), 'Start task before profiling')
+        da()
+        import profiling
         result = profiling.profile(ROOT, config, t, args.phase)
         require(result['data_hash'] == inspect_phase(t, config, args.phase)['hash'], 'Resolve data inspection before profiling')
         artifact(t, 'profiles', encoded(envelope(t, phase=args.phase, summary=result)) + '\n')
         print('Profile recorded; use analyzer context.')
+    elif cmd == 'fetch':
+        require(t['status'] in ('building', 'analyzing', 'awaiting-data'), 'Start the task before fetching')
+        result = fetching().fetch(ROOT, config, args.source, t['id'])
+        artifact(t, 'fetches', encoded(envelope(t, **result)) + '\n')
+        print(f'Fetched {len(result["raw"])} raw and {len(result["parsed"])} parsed files from {args.source}. '
+              f'Run data-check {t["id"]} --phase pre so the analyzer inspects them.')
     elif cmd == 'data-check':
         require(t['status'] in ('building', 'analyzing', 'awaiting-data', 'reviewing', 'testing'), 'Start the task first')
         if not analysis_gate(t, config, state, args.phase):

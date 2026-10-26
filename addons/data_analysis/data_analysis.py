@@ -37,11 +37,11 @@ def data_path(root, ref):
 
 
 def validate_provenance(root, entries):
-    require(isinstance(entries, list), 'data.provenance must be a list')
+    require(isinstance(entries, list), 'analysis.provenance must be a list')
     known = {}
     for entry in entries:
         require(isinstance(entry, dict) and set(entry) == {'path', 'kind', 'source', 'locator', 'derived_from'},
-                'Use templates/provenance.json fields')
+                'Use addons/data_analysis/templates/provenance.json fields')
         require(isinstance(entry['path'], str), 'Provenance path must be text')
         data_path(root, entry['path'])
         require(entry['path'] == Path(entry['path']).as_posix(), 'Use canonical data paths without ./ prefixes')
@@ -65,8 +65,18 @@ def validate_provenance(root, entries):
         pending -= ready
 
 
-def provenance(config, ref):
-    known = {item['path']: item for item in config['data']['provenance']}
+def fetched(root):
+    """Provenance recorded by `workflow.py fetch` (see fetching.py); declared entries take precedence."""
+    path = root / '.workflow/fetch-manifest.json' if root is not None else None
+    if not path or not path.exists():
+        return {}
+    keys = ('kind', 'source', 'locator', 'derived_from')
+    return {ref: dict({key: entry[key] for key in keys}, path=ref, fetched_at=entry['fetched_at'])
+            for ref, entry in json.loads(path.read_text(encoding='utf-8')).items()}
+
+
+def provenance(config, ref, root=None):
+    known = fetched(root) | {item['path']: item for item in config['analysis']['provenance']}
 
     def describe(path):
         entry = dict(known.get(path, dict(path=path, kind='unknown', source=UNAVAILABLE,
@@ -103,7 +113,7 @@ def validate_settings(settings, root=None):
     for spec in settings['datasets']:
         fields = {'path', 'phase', 'format', 'required_columns', 'min_records', 'purpose', 'required'}
         require(isinstance(spec, dict) and fields <= set(spec) <= fields | {'column_rules'},
-                'Use templates/dataset.json fields')
+                'Use addons/data_analysis/templates/dataset.json fields')
         require(isinstance(spec['path'], str), 'Dataset path must be text')
         spec['path'] = canonical_data_ref(spec['path'])
         if root is not None:
@@ -301,7 +311,7 @@ def scan(root, config, task, phase):
     for spec in specs:
         ref = spec['path']
         item = {'path': ref, 'kind': Path(ref).parts[1] if len(Path(ref).parts) > 2 else 'other',
-                'format': spec['format'], 'purpose': spec['purpose'], 'provenance': provenance(config, ref)}
+                'format': spec['format'], 'purpose': spec['purpose'], 'provenance': provenance(config, ref, root)}
         for parent in item['provenance']['lineage']:
             parent['version'] = parent_version(root, parent['path'], settings['max_file_bytes'])
         try:

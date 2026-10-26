@@ -1,5 +1,5 @@
 {
-  "config_version": 1,
+  "config_version": 2,
   "project": {
     "name": "",
     "purpose": "",
@@ -9,6 +9,10 @@
     "acceptance_criteria": []
   },
   "technology": "",
+  "addons": {
+    "data_analysis": false
+  },
+  "prune": [],
   "data": {
     "usage": "",
     "sources": "",
@@ -16,10 +20,9 @@
     "expected_size": "",
     "retention": "",
     "generated_outputs": "",
-    "approved_git_exceptions": "",
+    "approved_fixtures": [],
     "raw_policy": "Read-only originals; transformations go to data/processed/",
-    "git_policy": "Exclude data contents by default; track folder placeholders only; small fixtures require explicit approval",
-    "provenance": []
+    "git_policy": "Exclude data contents by default; track folder placeholders only; small fixtures require explicit approval"
   },
   "roles": [
     "builder",
@@ -29,7 +32,10 @@
   "delegation": {
     "capabilities": "",
     "review_mode": "independent",
-    "max_concurrency": 1
+    "max_concurrency": 2
+  },
+  "coordination": {
+    "lease_minutes": 120
   },
   "handoffs": {
     "policy": "Built-in fields and handoffs/ directory; builder to reviewer to tester",
@@ -37,7 +43,7 @@
   },
   "tasks": "One reviewable feature per task; built-in states and evidence checks",
   "prompts": "Log feature requests, material scope changes, and assignments; retain in Git; redact secrets before writing",
-  "memory": "Save durable feature memories after additions; record significant decisions and milestones in logging/journal.jsonl; retrieve compact character-bounded entries by default; full originals only when requested; retain history in Git",
+  "memory": "Save a feature memory after each task; record significant decisions and milestones in logging/journal.jsonl; retrieve compact entries by default; retain history in Git",
   "tokens": "Concise outputs; compact at phase boundaries or context pressure after saving a handoff; usage only when exposed",
   "validation": {
     "commands": [],
@@ -45,7 +51,8 @@
       "scripts",
       "tests",
       "templates",
-      "prompts/roles",
+      "agents",
+      "githooks",
       "AGENTS.md",
       "PROJECT.md",
       ".gitignore"
@@ -60,21 +67,5 @@
   "boundary_decisions": "No unresolved ambiguity",
   "context": {
     "max_chars": 12000
-  },
-  "analysis": {
-    "mode": "auto",
-    "phases": [
-      "pre",
-      "post"
-    ],
-    "data_access": "metadata-only",
-    "max_file_bytes": 5000000,
-    "max_files": 100,
-    "datasets": [],
-    "profiling": {
-      "enabled": false,
-      "max_columns": 20,
-      "max_chars": 6000
-    }
   }
 }

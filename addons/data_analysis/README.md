@@ -1,9 +1,51 @@
-# Data analysis and quality
+# Data-analysis add-on
 
-Use the initial CONFIGURE.md interview to approve datasets, phases, access policy,
-column expectations, size limits, profiling, and handling of unavailable evidence.
-The coordinator alone invokes workflow mutations; the analyzer interprets data
-under approved access. Deterministic processing and statistics are Python work.
+Optional. Enable it when tasks consume or produce datasets that need inspection:
+set `addons.data_analysis: true` and copy `addons/data_analysis/config.json` into the
+project config as `analysis`. When disabled, tasks are created with no data mode and
+the data commands (`data-check`, `analysis-report`, `data-resolve`, `profile`) are
+rejected. Projects that will never need it list `data_analysis` in `prune`.
+
+Contents: `data_analysis.py` (inspection), `fetching.py` (approved fetch/parse runs),
+`profiling.py` (aggregates), `rules.md` (appended to the project AGENTS.md), and
+`templates/` (source, dataset, column rules, provenance, analysis report). Its roles
+live with all the others in `agents/analyzer.md` and `agents/fetcher.md`
+(`requires: data_analysis`).
+
+## Fetching from approved sources
+
+Register each source in `analysis.sources` (templates/source.json). Approving the
+configuration, at `configure` or through `update-config`, is the explicit approval to
+download from that source; anything else still asks every time.
+
+| Field | Meaning |
+|---|---|
+| `name` | Identifier used by `fetch --source` |
+| `origin`, `locator` | Where the data comes from and which part (recorded as provenance) |
+| `command` | `["python3", "scripts/fetch/x.py", ...args]`: writes files under `$FETCH_TARGET` |
+| `target` | Folder under `data/raw/`; each fetch lands in a new `<target>/<UTC stamp>/` |
+| `parser`, `parsed_target` | Optional Python parser reading `$FETCH_DIR` and writing to `$PARSE_TARGET`, published under `data/processed/` (`[]` and `""` to skip) |
+| `timeout_seconds` | 1..3600 per step |
+
+The fetcher role writes the scripts inside its task's paths. The claim holder then runs:
+
+```sh
+python3 scripts/workflow.py fetch T001 --source sales_api
+python3 scripts/workflow.py data-check T001 --phase pre
+```
+
+Both steps run in a staging area. Nothing is published unless every step exits 0
+and produces files, and existing originals are never overwritten. Script output is
+discarded, so credentials and values are never stored; scripts read credentials from
+environment variables. Each fetch records a `fetches` artifact (paths and hashes)
+and updates `.workflow/fetch-manifest.json`. Inspection reads that manifest, so raw
+files carry the source origin/locator and parsed files carry lineage back to them.
+Declared `analysis.provenance` entries take precedence.
+
+Use the CONFIGURE.md interview to approve datasets, phases, access policy, column
+expectations, size limits, profiling, and handling of unavailable evidence. The
+analyzer interprets data under approved access; deterministic processing and
+statistics are Python work.
 
 ## Dataset selection
 
@@ -25,7 +67,7 @@ formats need approved Python extraction into data/. Inspectors never execute inp
 Strict JSON rejects duplicate keys and nonfinite constants; schema ambiguity must
 be resolved before analysis. Input files are never rewritten.
 
-Dataset specs follow templates/dataset.json. Optional column_rules follow
+Dataset specs follow templates/dataset.json here. Optional column_rules follow
 templates/column_rules.json: type, nullable, unique, minimum, and maximum. Rules
 validate values in Python rather than asking a model to count or check constraints.
 Type options are string, integer, number, boolean, and date. Check implementation
@@ -43,7 +85,7 @@ python3 scripts/workflow.py context T001 --role analyzer
 python3 scripts/workflow.py analysis-report T001 --phase pre --verdict pass --file analysis.md
 ```
 
-Use templates/analysis.md and record the correct phase. Repeat the requested
+Use templates/analysis.md (in this folder) and record the correct phase. Repeat the requested
 handoff after a passing report. Metadata alone does not establish semantic fit;
 state unknown or ask for approved summaries when evidence is insufficient.
 
@@ -89,8 +131,8 @@ Use data/raw/ for read-only originals, processed/ for transformations, and gener
 for synthetic/model datasets. Git ignores contents except explicit approved fixtures.
 Code, instructions, and internal workflow evidence remain readable normally.
 
-Record known source, locator, and derived_from entries using templates/provenance.json.
-An empty data.provenance list explicitly yields source unavailable. Only declared
+Record known source, locator, and derived_from entries using templates/provenance.json (in this folder).
+An empty analysis.provenance list explicitly yields source unavailable. Only declared
 original generated material is exempt; externally derived facts retain attribution
 regardless of output folder. Origin declarations are not independently verified.
 

@@ -1,119 +1,98 @@
 # Configuration interview
 
-Present ALL topics below at the beginning, explain choices and fixed constraints,
-and prefill known answers for confirmation. Offer recommended defaults for batch
-acceptance. Resolve missing, conflicting, or ambiguous choices before implementation.
-Follow templates/agent_rules.md for approval and Python/model boundaries.
+Present ALL topics at the start. Explain each choice and its fixed constraints,
+prefill what is already known, and offer the recommended defaults for batch
+acceptance. Resolve missing, conflicting, or ambiguous answers before
+implementation. Record the answers in a copy of templates/config.json. Every field
+is required; use `none` or `not applicable` explicitly. Then show the brief,
+configuration, proposed changes, and validation plan for explicit approval before
+`configure --config project-config.json --approved`.
 
-Record answers in a copy of templates/config.json. Every field is required (analysis.datasets and data.provenance may be []); use
-`none` or `not applicable` explicitly for inapplicable text. Show the completed
-brief, configuration, proposed changes, and validation plan for explicit approval
-before `configure --config project-config.json --approved`.
-
-| Topic | Ask | Default / implementation |
+| Topic | Ask | Default |
 |---|---|---|
-| Project | Name, purpose, users, scope, exclusions, observable acceptance? | One focused deliverable |
-| Technology | Languages, frameworks, dependencies, environment? | Python for ALL deterministic components; native tools may be invoked |
-| Data | Usage during setup or later, sources, sensitivity, size, retention, outputs, Git exceptions? | Read-only raw/; transformations processed/; synthetic/model generated/; contents ignored |
-| Evidence quality | Confirm external-data staging, download approvals, source/locator availability, lineage, and unknown handling? | ./data only; explicit download approval; source unavailable/unknown rather than invented content |
-| Roles | Builder, reviewer, tester, conditional analyzer, optional specialists? | Three required roles plus automatic analyzer when data is relevant |
-| Analysis | Expected datasets, phase, formats, columns, minimum records, meaning, size/file limits, access? | analysis phases pre/post; auto discovery or explicit datasets; metadata-only; max_file_bytes=5000000; max_files=100 |
-| Data quality | Column types, nullable/unique rules, numeric bounds, strict JSON, and date expectations? | Optional column_rules={}; reject ambiguous/nonfinite JSON; see templates/column_rules.json |
-| Profiling | Approve aggregate summaries for selected data, limits, and sensitivity? | Disabled; enable only with approved-summaries; max_columns=20, max_chars=6000; no rows/category values |
-| Configuration updates | Version, dry-run checks, approval preview and active task reset? | config_version=1; validate-config is read-only; update-config needs approval and matching preview hash |
-| Delegation | Capabilities, concurrency, independent review or approved fallback? | Independent QC; concurrency 1; coordinator alone writes state |
-| Handoffs | Routing, context requirements, repair allowance? | Fixed structured fields; handoffs/; two repair cycles |
-| Tasks | Granularity, dependencies, evidence, done criteria? | One reviewable feature; built-in states; evidence freshness |
-| Prompts | Major-prompt definition, retention, exclusions? | Requests, scope changes, exact assignments; reference evidence without copying it |
-| Decision journal | Which choices count as significant; retention, evidence links, retrieval budget, and sensitive exclusions? | logging/journal.jsonl plus generated Markdown; significant choices/milestones; relevant alternatives; compact latest 20/6000 characters; full records on request; retain in Git; no raw data/secrets |
-| Memory | Durable decisions, feature updates, relevant retrieval? | Preserve template index and project feature memories |
-| Tokens/context | Desired context size, compaction triggers, output expectations, usage availability? | context.max_chars=12000; focused packets and structured checkpoints |
-| Validation coverage | Which source directories, tests, manifests, and files affect behavior? | validation.source_paths defaults cover harness; add application paths; reviewer references extend coverage |
-| Validation execution | Commands, timeout, diagnostics, summary limits, manual checks? | Argument arrays; timeout_seconds=60; diagnostics=off; summary_max_chars=2000 |
-| Approvals | Clarify material questions before plans; confirm approval for ALL feature enhancements, substantial fixes, download actions, and progress expectations? | Small-task exception applies only to clear fixes/maintenance adding no functionality; ask when uncertain; setup always needs approval |
+| Project | Name, purpose, users, scope, exclusions, observable acceptance criteria? | One focused deliverable |
+| Technology | Languages, frameworks, dependencies, environment? | Python for all deterministic components |
+| Data | Sources, sensitivity, size, retention, generated outputs, approved Git fixtures? | raw/ read-only, processed/, generated/; contents ignored; `approved_fixtures: []` |
+| Evidence | External data staged under ./data, download approvals, unknown-source handling? | ./data only; explicit download approval; "source unavailable" rather than invention |
+| Data-analysis add-on | Will tasks fetch, consume, or produce datasets that need inspection or an analyzer? | `addons.data_analysis: false`; if true, add the `analysis` section (below) |
+| Roles | Builder/reviewer/tester policies; any custom roles; which runtime plays each? | Three required roles in `agents/`; analyzer and fetcher load with the data add-on |
+| Agents | Which assistants work in parallel (Claude, Codex, ...)? Lease length? | `max_concurrency: 2` agents; `lease_minutes: 120` |
+| Review | Independent review, approved same-agent fallback, or cross-agent? | `independent`; `cross-agent` when two assistants are available |
+| Handoffs | Repair allowance? | Built-in fields; `max_repairs: 2` |
+| Tasks | Granularity, dependencies, path scopes, done criteria? | One reviewable feature per task with explicit `--path` globs |
+| Prompts and memory | What counts as a major prompt; retention? | Requests, scope changes, assignments; one feature memory per task |
+| Decision journal | Which choices are significant; retrieval budget; exclusions? | Significant choices and milestones; compact latest 20 / 6000 chars; no secrets or raw data |
+| Context | Context size and compaction expectations? | `context.max_chars: 12000`; checkpoint before compaction |
+| Validation | Source roots, test commands, timeout, diagnostics? | Add application dirs to `source_paths`; `timeout_seconds: 60`; diagnostics off |
+| Approvals | What needs approval beyond the defaults? | Every feature enhancement, substantial fixes, downloads, setup |
 | Delivery | Documentation, deployment, supported environments, definition of done? | Evidence, review, executed tests, memory |
-| Execution boundary | Any ambiguous deterministic/judgment components? | Clarify before implementing; record boundary_decisions |
+| Execution boundary | Any component where deterministic vs judgment is unclear? | Clarify first and record in `boundary_decisions` |
+| Template cleanup | Which template components does this project not need? | Prune everything the use case does not need (see below) |
 
-Confirm raw/Git policies. Never modify/delete originals during processing; authorize
-retention deletion separately. Document exact approved small fixtures or `none`.
-These fields do not implement OS protection or edit .gitignore.
+## Template cleanup (de-bloating)
 
-Distinguish Python-enforced settings (types, role names, source selection, artifact
-checks, data inspection/phase gates, context size, timeout, diagnostics, repair transitions) from assistant
-policies (approval, actual concurrency, independent delegation, compaction,
-sensitivity, retention, semantic criteria, and Python-only application work).
-The script cannot authenticate human approval, launch agents, or compact context.
-Paths, states, roles, and handoff fields are fixed; changing them needs reviewed code.
+This template ships with components that many projects never use. Keep the project
+as small as its use case: from the answers above, recommend removing every
+component the project will not use, and list each one in `prune` in the
+configuration. Explain what each removal gives up, ask only about the uncertain
+ones, and include the final list in the plan presented for approval. Deletion
+happens only on `configure --approved` (or an approved `update-config`, whose
+preview lists every path) and cannot be undone except through Git.
+
+| `prune` entry | Removes | Recommend removing when |
+|---|---|---|
+| `data_analysis` | `addons/data_analysis/`, the analyzer and fetcher roles, their tests | Tasks never fetch, inspect, or analyze datasets (`addons.data_analysis` must be false) |
+| `template_history` | `docs/template-history/` | Almost always; it records how the template was built |
+| `initialization_primer` | `prompts/template_prompt_initialization.md` | Almost always once configured |
+| `configuration_interview` | `CONFIGURE.md` | Configuration is unlikely to be revisited, or the template copy suffices |
+| `claude_integration` | `CLAUDE.md`, `.claude/settings.json` (hooks), `.claude/agents/` | Claude Code will not be used; this also removes the Claude hooks |
+
+Never prune what the project still uses. The core (`scripts/`, `agents/` core
+roles, `templates/`, `githooks/`, `logging/`) is not prunable. Add custom roles or
+extra cleanup only through reviewed code changes.
+
+## What Python enforces and what stays policy
+
+Python and hooks enforce: config types, role definition files, claims and path
+scopes, the state lock, workflow-owned files, read-only raw data, artifact hashes,
+evidence freshness, the repair limit, validation timeouts, commit checks, and (with
+the add-on) data inspection gates. Assistant policy covers: approval itself, actual
+delegation and independence, compaction, sensitivity judgments, semantic criteria,
+and keeping application work in Python. Python cannot authenticate approval, launch
+agents, or compact context. Paths, states, and handoff fields are fixed in code.
 
 Source fingerprints skip data, workflow artifacts, environments, caches, and build
-outputs. Selected data has a separate version fingerprint for analysis and downstream
-evidence. Discuss task relevance, expected data, and semantic suitability explicitly. Choose all relevant source
-roots so added/deleted files are detected. Sources outside selection are not covered.
-For diagnostic summaries, approve a Python wrapper that emits sanitized summary JSON;
-raw stdout/stderr is never automatically retained. No automatic redaction is promised.
+outputs. Choose source roots that cover everything whose change should invalidate
+a review. Files outside the selection are neither fingerprinted nor claim-checked.
 
-If independent agents are unavailable, request an independent review session or
-explicit approval for a same-agent fallback. Keep builder, QC, and testing even
-when a small task does not need a separate approval plan.
+## Agents and roles
 
-For analysis.datasets, use templates/dataset.json: required/optional input or output,
-path under data/, phase, supported format, required columns, min_records, and purpose.
-With no specs, raw/ and other data locations are pre inputs; processed/generated are
-post outputs. Use explicit specs for other timing or --dataset task selections.
-Only UTF-8 CSV/JSON/JSONL/text/Markdown are inspected natively; approve Python extraction
-for other formats. Ask about sensitivity before authorizing selected summaries.
+Ask which assistants will run and how they should split work. Each agent needs a
+`WORKFLOW_AGENT` identity (Claude gets it from `.claude/settings.json`). Tasks must
+declare `--path` scopes narrow enough that parallel agents do not overlap. Confirm
+each role's `writes`, `tools`, `runtime`, `model_hint`, and `independent_of`, and
+offer custom roles (for example a documenter) as extra `agents/<role>.md` files.
 
-At intake the coordinator records auto/expected/none task relevance. A request that
-implies missing data must use expected; this inference is model judgment, not a
-Python keyword rule. Missing/unsuitable data or semantic mismatch requires a user
-question and pauses dependent work. Never fabricate or silently substitute data.
-Both pre/post analysis run when relevant. No data means no analyzer model call.
-Builder writes processors, coordinator executes, analyzer interprets; QC/test remain.
+If independent agents are unavailable, ask for an independent review session or
+explicit approval of a same-agent fallback (`approved-same-agent`). Builder, QC, and
+testing remain even for small tasks.
 
-The shared rules are mandatory ground rules, not defaults to silently weaken.
-External evidence must be staged under ./data; obtain explicit approval before
-any downloads. Project code/instructions and workflow records remain accessible.
-Record known origins/locators/lineage using data.provenance entries from
-templates/provenance.json (or [] if unknown). Missing details must say source
-unavailable. Original generated content needs no invented source; externally
-derived facts still need attribution. Unknown is correct when evidence cannot
-answer the question. Do not promise that metadata checks guarantee factual truth.
+## Data-analysis add-on
 
-Confirm that architecture/convention/workflow changes update the appropriate
-instructions, README, interview/configuration, role prompts, primer, and tests.
-Keep communication concise and preserve decisions, sources, and unknowns while
-pruning context. All material questions must be clarified before generating a
-feature plan; every feature enhancement needs explicit approval, regardless of size.
+Enable it only when tasks depend on datasets. Copy `addons/data_analysis/config.json`
+into the config as `analysis` and set `addons.data_analysis: true`. The add-on brings
+the analyzer and fetcher roles (`agents/analyzer.md`, `agents/fetcher.md`, marked
+`requires: data_analysis`). Ask which raw data sources to register in
+`analysis.sources` (templates/source.json): origin, locator, target folder, whether
+a parser is needed, credentials (environment variables only), and timeouts.
+Registering a source approves fetching from it. Then ask about expected datasets (addons/data_analysis/templates/dataset.json), phases (pre/post),
+formats, required columns and column rules, minimum records, size and file limits,
+analyzer access (`metadata-only` or `approved-summaries`), profiling (off by
+default), and provenance entries (addons/data_analysis/templates/provenance.json, or
+`[]`). See addons/data_analysis/README.md for the semantics.
 
-Normalize dataset paths before matching rules; explicit selections must overlap
-requested phases. Already inspected data cannot disappear into a skipped phase:
-ask for restoration or an approved scope change. Reinspect pending stale evidence
-before model work. Current phase, question, inspection, and role references take
-priority over generic settings in compact context.
+## Updates
 
-For optional profiling, approve the selected datasets and statistics explicitly.
-Aggregates can still reveal sensitive facts. It works before the analyzer's initial
-verdict, so there is no need to approve an uninformed analysis to build a profiler.
-Column type rules do not rewrite input values; CSV integer/number/boolean checks
-use controlled coercion, date requires YYYY-MM-DD, and unique ignores nullable blanks.
-
-Discuss versioned lineage: recorded parent hashes describe observed local parents,
-not proof of the producer's original inputs. Historical manifests remain intact.
-For updates, validate and preview candidate config, inspect changed fields and task
-impact, then obtain approval before --approved --preview-hash. Dataset scope changes
-reset active scope explicitly; unrelated edits preserve previously inspected inputs.
-
-The journal's location and core record schema are fixed; no additional config keys
-are required. Record agreed scope/retention in the memory policy field. Preserve
-existing entries; initial configure does not reset a prior project journal. Python
-automatically records initial configuration, task creation/completion, and applied
-config updates. Models/coordinator identify significant decisions; these cannot
-be inferred reliably from lifecycle events. Prefer journal filters to full-history
-context. Logging paths are excluded from source fingerprints, not from Git.
-
-Journal retrieval compaction is an on-demand Python projection, not extra stored
-summary content or a model call. Confirm the count/character expectations; CLI
---limit/--max-chars override defaults without new config keys. --all removes count
-limits only, and --full is explicit for original fields. Saved-record/view-failure
-responses must repair the view instead of appending duplicates. Markdown escaping
-changes display only; JSONL preserves original text.
+Configuration changes after setup use `update-config`: preview the changes and
+affected tasks, get approval, then apply with the matching `--preview-hash`.
+Changing dataset scope resets active analysis scope; unrelated edits keep it.

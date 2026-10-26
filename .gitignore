@@ -9,3 +9,8 @@ __pycache__/
 /data/**
 !/data/**/
 !/data/**/.gitkeep
+
+# Workflow lock and personal Claude settings
+/.workflow/lock
+/.workflow/fetch-staging/
+/.claude/settings.local.json

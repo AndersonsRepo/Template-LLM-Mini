@@ -1,4 +1,4 @@
-"""Append-only decision/milestone records and a generated Markdown view; one writer."""
+"""Append-only decision/milestone records and a generated Markdown view; callers hold the workflow lock."""
 from datetime import datetime, timezone
 import json
 import html
@@ -6,8 +6,9 @@ from pathlib import Path
 import re
 from urllib.parse import quote
 
-FIELDS = {'id', 'timestamp', 'type', 'task', 'decision', 'rationale', 'alternatives',
+FIELDS = {'id', 'timestamp', 'type', 'task', 'agent', 'decision', 'rationale', 'alternatives',
           'outcome', 'status', 'evidence', 'supersedes'}
+LEGACY_FIELDS = FIELDS - {'agent'}  # Records written before agent identity existed.
 
 
 def require(ok, message):
@@ -47,7 +48,9 @@ def load(root):
             item = json.loads(line)
         except ValueError:
             raise ValueError(f'Invalid journal JSON at line {number}') from None
-        require(isinstance(item, dict) and set(item) == FIELDS, f'Invalid journal fields at line {number}')
+        require(isinstance(item, dict) and set(item) in (FIELDS, LEGACY_FIELDS), f'Invalid journal fields at line {number}')
+        item.setdefault('agent', None)
+        require(item['agent'] is None or text(item['agent']), f'Invalid journal agent at line {number}')
         require(item['id'] == f'J{number:06}', f'Invalid journal sequence at line {number}')
         require(item['type'] in ('decision', 'milestone'), 'Invalid journal record type')
         require(item['task'] is None or isinstance(item['task'], str) and re.fullmatch(r'T\d+', item['task']), 'Invalid journal task')
@@ -90,7 +93,7 @@ def render(root, entries=None):
         entry = {key: markdown_text(value) if isinstance(value, str) else value for key, value in original.items()}
         status = f'superseded by {superseded[entry["id"]]}' if entry['id'] in superseded else entry['status']
         lines += [f'## {entry["id"]}: {entry["decision"]}', '',
-                  f'{entry["timestamp"]} | {entry["type"]} | {entry["task"] or "project"} | {status}', '',
+                  f'{entry["timestamp"]} | {entry["type"]} | {entry["task"] or "project"} | {entry["agent"] or "-"} | {status}', '',
                   f'Rationale: {entry["rationale"]}', '', f'Outcome: {entry["outcome"]}', '']
         if entry['alternatives']:
             lines += ['Alternatives: ' + '; '.join(markdown_text(value) for value in entry['alternatives']), '']
@@ -104,7 +107,7 @@ def render(root, entries=None):
     temporary.replace(view)
 
 
-def append(root, *, kind, task, decision, rationale, alternatives, outcome, status, evidence, supersedes=None):
+def append(root, *, kind, task, decision, rationale, alternatives, outcome, status, evidence, supersedes=None, agent=None):
     entries = load(root)
     require(kind in ('decision', 'milestone'), 'Invalid journal kind')
     require(task is None or isinstance(task, str) and re.fullmatch(r'T\d+', task), 'Invalid task reference')
@@ -112,6 +115,7 @@ def append(root, *, kind, task, decision, rationale, alternatives, outcome, stat
     require(isinstance(alternatives, list) and all(text(x) for x in alternatives), 'Alternatives must be strings')
     require(isinstance(evidence, list) and all(text(x) for x in evidence), 'Evidence must be file references')
     require(status in (('proposed', 'accepted', 'rejected') if kind == 'decision' else ('recorded',)), 'Invalid decision status')
+    require(agent is None or text(agent), 'Agent must be text')
     if supersedes is not None:
         require(kind == 'decision' and status == 'accepted', 'Only accepted decisions can supersede')
         require(any(item['id'] == supersedes and item['type'] == 'decision' for item in entries), 'Unknown superseded decision')
@@ -119,7 +123,7 @@ def append(root, *, kind, task, decision, rationale, alternatives, outcome, stat
     for ref in evidence:
         require(local(root, ref).is_file(), f'Journal evidence missing: {ref}')
     item = dict(id=f'J{len(entries) + 1:06}', timestamp=datetime.now(timezone.utc).isoformat(),
-                type=kind, task=task, decision=decision, rationale=rationale, alternatives=alternatives,
+                type=kind, task=task, agent=agent, decision=decision, rationale=rationale, alternatives=alternatives,
                 outcome=outcome, status=status, evidence=evidence, supersedes=supersedes)
     canonical, _ = paths(root)
     canonical.parent.mkdir(parents=True, exist_ok=True)
@@ -149,7 +153,7 @@ def query(root, *, task=None, kind=None, entry_id=None, limit=20, full=False, ma
     selected = selected if limit is None else selected[-limit:]
     if not full:
         compact = []
-        fields = ('id', 'timestamp', 'type', 'task', 'decision', 'rationale', 'outcome', 'status', 'supersedes', 'superseded_by')
+        fields = ('id', 'timestamp', 'type', 'task', 'agent', 'decision', 'rationale', 'outcome', 'status', 'supersedes', 'superseded_by')
         for entry in selected:
             result = {key: entry[key] for key in fields}
             clipped = []

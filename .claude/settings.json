@@ -1,0 +1,34 @@
+{
+  "env": {
+    "WORKFLOW_AGENT": "claude"
+  },
+  "permissions": {
+    "ask": [
+      "WebFetch",
+      "WebSearch"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/workflow.py\" guard hook"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/workflow.py\" guard hook"
+          }
+        ]
+      }
+    ]
+  }
+}

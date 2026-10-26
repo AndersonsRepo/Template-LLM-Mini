@@ -1,0 +1,16 @@
+{
+  "name": "example_source",
+  "origin": "Where the data comes from, e.g. https://example.org/api/v1/items or 'Finance team SFTP export'",
+  "locator": "Which part: endpoint, query, file name, sheet, or 'source unavailable'",
+  "command": [
+    "python3",
+    "scripts/fetch/example_source.py"
+  ],
+  "target": "data/raw/example_source",
+  "parser": [
+    "python3",
+    "scripts/parse/example_source.py"
+  ],
+  "parsed_target": "data/processed/example_source",
+  "timeout_seconds": 300
+}

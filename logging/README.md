@@ -2,6 +2,8 @@
 
 journal.jsonl is the chronological canonical record; journal.md is generated.
 Only Python workflow commands append records. Do not edit/rewrite earlier entries.
+Appends run under the workflow lock, so concurrent agents cannot interleave records.
+Each record names the `agent` that wrote it (older records may have none).
 This directory is not a Python package and does not replace standard-library logging.
 
 Record significant decisions and feature milestones. Include rejected alternatives

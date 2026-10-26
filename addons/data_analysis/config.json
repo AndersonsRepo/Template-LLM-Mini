@@ -1,0 +1,18 @@
+{
+  "mode": "auto",
+  "phases": [
+    "pre",
+    "post"
+  ],
+  "data_access": "metadata-only",
+  "max_file_bytes": 5000000,
+  "max_files": 100,
+  "datasets": [],
+  "profiling": {
+    "enabled": false,
+    "max_columns": 20,
+    "max_chars": 6000
+  },
+  "provenance": [],
+  "sources": []
+}
