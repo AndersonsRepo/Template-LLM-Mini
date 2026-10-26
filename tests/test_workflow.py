@@ -332,5 +332,76 @@ class WorkflowTests(HarnessTestCase):
         self.assertIn('Assumed defaults: - users: data managers - add-on: enabled', entry['outcome'])
 
 
+    def test_validate_config_lists_every_structural_problem(self):
+        del self.config['technology']
+        self.config['delegation']['max_concurrency'] = '2'
+        self.config['project']['name'] = ''
+        self.put('config.json', self.config)
+        result = self.run_cli('validate-config', '--config', 'config.json', success=False)
+        self.assertIn('3 problem(s)', result.stderr)
+        for expected in ('config: missing keys technology', 'config.delegation.max_concurrency: expected integer',
+                         'config.project.name: provide a nonempty string'):
+            self.assertIn(expected, result.stderr)
+
+    def test_approved_fixtures_are_unignored_and_the_block_is_enforced(self):
+        self.git_init()
+        self.put('data/raw/sample.csv', 'id\n1\n')
+        self.config['data']['approved_fixtures'] = ['data/raw/sample.csv']
+        self.put('config.json', self.config)
+        self.configure()
+        self.assertIn('!/data/raw/sample.csv', (self.root / '.gitignore').read_text())
+        self.assertEqual(self.git('check-ignore', '-q', 'data/raw/sample.csv', check=False).returncode, 1)
+        self.git('add', '.gitignore', 'data/raw/sample.csv')
+        self.run_cli('guard', 'commit')
+        self.put('.gitignore', (self.root / '.gitignore').read_text().replace('!/data/raw/sample.csv\n', ''))
+        self.git('add', '.gitignore')
+        self.assertIn('approved_fixtures block', self.run_cli('guard', 'commit', code=1).stderr)
+        self.run_cli('install-hooks')
+        self.assertIn('!/data/raw/sample.csv', (self.root / '.gitignore').read_text())
+        self.config['data']['approved_fixtures'] = []
+        self.put('candidate.json', self.config)
+        preview = json.loads(self.run_cli('update-config', '--config', 'candidate.json').stdout)
+        self.run_cli('update-config', '--config', 'candidate.json', '--approved', '--preview-hash', preview['preview_hash'])
+        self.assertNotIn('approved_fixtures', (self.root / '.gitignore').read_text())
+
+    def test_doctor_reports_setup_problems(self):
+        self.configure()
+        result = self.run_cli('doctor', agent=None, code=2)
+        self.assertIn('warn: WORKFLOW_AGENT is unset', result.stdout)
+        self.assertIn('warn: not a Git work tree', result.stdout)
+        self.git_init(); self.run_cli('install-hooks')
+        template = self.root.parent / 'template'
+        template.mkdir(); (template / 'AGENTS.md').write_text('# Configure this template first\n')
+        self.git('remote', 'add', 'origin', str(template))
+        result = self.run_cli('doctor', code=2)
+        self.assertIn('warn: remote origin points at the template', result.stdout)
+        self.git('remote', 'rename', 'origin', 'template')
+        result = self.run_cli('doctor', code=0)
+        self.assertIn('ok: core.hooksPath=githooks', result.stdout)
+        self.assertIn('note: Claude hooks load only', result.stdout)
+
+    def test_unset_identity_warns_on_mutations(self):
+        self.configure()
+        result = self.run_cli('add', '--title', 'X', '--criterion', 'Works', '--prompt', 'prompt.md',
+                              '--path', 'example.py', agent=None)
+        self.assertIn('WORKFLOW_AGENT is unset', result.stderr)
+        self.assertNotIn('WORKFLOW_AGENT is unset', self.run_cli('status', agent=None).stderr)
+
+    def test_new_project_clones_with_fetch_only_template_remote(self):
+        self.git_init()
+        self.git('add', '-A'); self.git('commit', '-q', '-m', 'template')
+        dest = self.root.parent / 'fresh'
+        self.run_cli('new', str(dest))
+        run = lambda *a: subprocess.run(['git', *a], cwd=dest, capture_output=True, text=True).stdout.strip()
+        self.assertEqual(run('remote'), 'template')
+        self.assertTrue(run('config', 'remote.template.pushurl').startswith('no-push://'))
+        self.assertEqual(run('config', 'user.email'), 'test@example.invalid')
+        self.assertEqual(run('config', 'core.hooksPath'), 'githooks')
+        self.assertTrue((dest / 'scripts/workflow.py').is_file())
+        self.run_cli('new', str(dest), success=False)
+        self.configure()
+        self.assertIn('configured project', self.run_cli('new', str(self.root.parent / 'other'), success=False).stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -12,7 +12,8 @@ End the approval request with an **"Assumed unless you object"** list naming eve
 item still open and the default that will apply. A bare "approved" then accepts
 exactly those defaults; an empty list means nothing is assumed. Pass the list with
 `configure ... --assumed assumed.md` so the configuration milestone in the journal
-records it.
+records it. Afterwards, `workflow.py doctor` checks hooks, identities, the
+template remote, and approved fixtures.
 
 | Topic | Ask | Default |
 |---|---|---|

@@ -15,6 +15,7 @@ import tempfile
 
 import coordination as coord
 import decision_journal
+import doctor
 import roles
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,7 @@ ADDON = ROOT / 'addons/data_analysis'
 VERSION = 4
 CONFIG_VERSION = 2
 AGENT = 'local'  # Set from --agent or WORKFLOW_AGENT in main().
+AGENT_EXPLICIT = False  # False when AGENT fell back to 'local'.
 FIELDS = ('objective', 'files', 'memories', 'decisions', 'changes', 'validation',
           'unresolved', 'next_action')
 KINDS = ('prompts', 'handoffs', 'reviews', 'tests', 'memories', 'checkpoints', 'inspections', 'analyses', 'profiles', 'fetches')
@@ -148,6 +150,36 @@ def prune(refs):
             parent = parent.parent
 
 
+FIXTURES_BEGIN = '# >>> workflow: approved_fixtures (generated; change via update-config)'
+FIXTURES_END = '# <<< workflow'
+
+
+def gitignore_with_fixtures(content, config):
+    """.gitignore text with the generated block that un-ignores data.approved_fixtures."""
+    lines, inside = [], False
+    for line in content.splitlines():
+        if line == FIXTURES_BEGIN:
+            inside = True
+        elif inside and line == FIXTURES_END:
+            inside = False
+        elif not inside:
+            lines.append(line)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    fixtures = config['data']['approved_fixtures']
+    if fixtures:
+        lines += ['', FIXTURES_BEGIN, *[f'!/{ref}' for ref in fixtures], FIXTURES_END]
+    return '\n'.join(lines) + '\n'
+
+
+def sync_gitignore(config):
+    path = ROOT / '.gitignore'
+    current = path.read_text(encoding='utf-8') if path.exists() else ''
+    expected = gitignore_with_fixtures(current, config)
+    if expected != current:
+        write(path, expected)
+
+
 def claude_enabled(config):
     return 'claude_integration' not in config['prune']
 
@@ -162,57 +194,72 @@ def validate_config(c):
     empty_ok = ('config.analysis.datasets', 'config.analysis.provenance', 'config.analysis.sources',
                 'config.data.approved_fixtures', 'config.prune')
 
+    errors = []
+
     def structure(actual, expected, location='config'):
+        # Collect every structural problem so one validate-config run lists them all.
         if isinstance(expected, dict):
-            require(isinstance(actual, dict) and set(actual) == set(expected), f'{location}: keys differ from template')
-            for key, value in expected.items():
-                structure(actual[key], value, location + '.' + key)
+            if not isinstance(actual, dict):
+                errors.append(f'{location}: expected an object')
+                return
+            missing, extra = sorted(set(expected) - set(actual)), sorted(set(actual) - set(expected))
+            if missing:
+                errors.append(f'{location}: missing keys {", ".join(missing)}')
+            if extra:
+                errors.append(f'{location}: unexpected keys {", ".join(extra)}')
+            for key in set(expected) & set(actual):
+                structure(actual[key], expected[key], location + '.' + key)
         elif isinstance(expected, str):
-            require(text(actual), f'{location}: provide a nonempty string; use none explicitly')
+            if not text(actual):
+                errors.append(f'{location}: provide a nonempty string; use none explicitly')
         elif type(expected) is bool:
-            require(type(actual) is bool, f'{location}: expected boolean')
+            if type(actual) is not bool:
+                errors.append(f'{location}: expected boolean')
         elif type(expected) is int:
-            require(type(actual) is int, f'{location}: expected integer')
+            if type(actual) is not int:
+                errors.append(f'{location}: expected integer')
         elif isinstance(expected, list):
-            require(isinstance(actual, list) and (actual or location in empty_ok), f'{location}: expected nonempty list')
+            if not (isinstance(actual, list) and (actual or location in empty_ok)):
+                errors.append(f'{location}: expected nonempty list')
     structure(c, template)
-    require(c['config_version'] == CONFIG_VERSION, 'Unsupported configuration version')
+    require(not errors, f'Configuration has {len(errors)} problem(s):\n- ' + '\n- '.join(sorted(errors)))
+    require(c['config_version'] == CONFIG_VERSION, f'config.config_version: unsupported; expected {CONFIG_VERSION}')
     if data_enabled(c):
         da().validate_settings(c['analysis'], ROOT)
         profile_settings = c['analysis']['profiling']
-        require(1 <= profile_settings['max_columns'] <= 1000 and 500 <= profile_settings['max_chars'] <= 100000, 'Invalid profiling limits')
-        require(not profile_settings['enabled'] or c['analysis']['data_access'] == 'approved-summaries', 'Profiling requires approved-summaries access')
+        require(1 <= profile_settings['max_columns'] <= 1000 and 500 <= profile_settings['max_chars'] <= 100000, 'config.analysis.profiling: max_columns must be 1..1000 and max_chars 500..100000')
+        require(not profile_settings['enabled'] or c['analysis']['data_access'] == 'approved-summaries', 'config.analysis.profiling: enabled requires data_access approved-summaries')
         da().validate_provenance(ROOT, c['analysis']['provenance'])
         fetching().validate_sources(c['analysis']['sources'], ROOT)
     require(strings(c['prune']) and len(set(c['prune'])) == len(c['prune']) and set(c['prune']) <= set(PRUNABLE),
-            f'prune entries must be unique names from: {", ".join(PRUNABLE)}')
-    require(not ('data_analysis' in c['prune'] and data_enabled(c)), 'Cannot prune the data_analysis add-on while it is enabled')
-    require(strings(c['data']['approved_fixtures']), 'Approved fixtures must be data/ paths')
+            f'config.prune: entries must be unique names from: {", ".join(PRUNABLE)}')
+    require(not ('data_analysis' in c['prune'] and data_enabled(c)), 'config.prune: cannot prune data_analysis while addons.data_analysis is true')
+    require(strings(c['data']['approved_fixtures']), 'config.data.approved_fixtures: must be data/ paths')
     for ref in c['data']['approved_fixtures']:
         local(ref)
-        require(Path(ref).parts[0] == 'data', f'Approved fixtures must be under data/: {ref}')
-    require(strings(c['project']['acceptance_criteria']), 'Acceptance criteria must be strings')
-    require(strings(c['roles']) and len(set(c['roles'])) == len(c['roles']), 'Roles must be unique names')
-    require(set(roles.REQUIRED_ROLES) <= set(c['roles']), 'Required roles: builder, reviewer, tester')
-    require('coordinator' not in c['roles'], 'coordinator is implicit; do not list it as a role')
+        require(Path(ref).parts[0] == 'data', f'config.data.approved_fixtures: must be under data/: {ref}')
+    require(strings(c['project']['acceptance_criteria']), 'config.project.acceptance_criteria: must be strings')
+    require(strings(c['roles']) and len(set(c['roles'])) == len(c['roles']), 'config.roles: must be unique names')
+    require(set(roles.REQUIRED_ROLES) <= set(c['roles']), 'config.roles: required roles are builder, reviewer, tester')
+    require('coordinator' not in c['roles'], 'config.roles: coordinator is implicit; do not list it')
     roles.configured(ROOT, c)
-    require(c['delegation']['review_mode'] in ('independent', 'approved-same-agent', 'cross-agent'), 'Unsupported review mode')
-    require(c['delegation']['max_concurrency'] >= 1 and c['handoffs']['max_repairs'] >= 0, 'Invalid concurrency/repair limit')
-    require(1 <= c['coordination']['lease_minutes'] <= 10080, 'Lease must be 1..10080 minutes')
+    require(c['delegation']['review_mode'] in ('independent', 'approved-same-agent', 'cross-agent'), 'config.delegation.review_mode: use independent, approved-same-agent, or cross-agent')
+    require(c['delegation']['max_concurrency'] >= 1 and c['handoffs']['max_repairs'] >= 0, 'config.delegation.max_concurrency must be >= 1 and config.handoffs.max_repairs >= 0')
+    require(1 <= c['coordination']['lease_minutes'] <= 10080, 'config.coordination.lease_minutes: must be 1..10080')
     for key in ('raw_policy', 'git_policy'):
-        require(c['data'][key] == template['data'][key], 'Preserve required data policies')
+        require(c['data'][key] == template['data'][key], f'config.data.{key}: keep the template text')
     v = c['validation']
     require(all(strings(command) and command for command in v['commands']),
             'config.validation.commands: each command is a nonempty argument array, '
             'e.g. [["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]]')
-    require(1 <= v['timeout_seconds'] <= 3600, 'Timeout must be 1..3600 seconds')
-    require(v['diagnostics'] in ('off', 'summary'), 'Diagnostics must be off or summary')
-    require(1 <= v['summary_max_chars'] <= 10000, 'Summary limit must be 1..10000 characters')
-    require(strings(v['source_paths']), 'Source paths must be strings')
+    require(1 <= v['timeout_seconds'] <= 3600, 'config.validation.timeout_seconds: must be 1..3600')
+    require(v['diagnostics'] in ('off', 'summary'), 'config.validation.diagnostics: must be off or summary')
+    require(1 <= v['summary_max_chars'] <= 10000, 'config.validation.summary_max_chars: must be 1..10000')
+    require(strings(v['source_paths']), 'config.validation.source_paths: must be strings')
     for ref in v['source_paths']:
         local(ref)
-        require(source_allowed(ref), f'Cannot fingerprint generated/data/environment path: {ref}')
-    require(2000 <= c['context']['max_chars'] <= 100000, 'Context limit must be 2000..100000 characters')
+        require(source_allowed(ref), f'config.validation.source_paths: cannot fingerprint generated/data/environment path {ref}')
+    require(2000 <= c['context']['max_chars'] <= 100000, 'config.context.max_chars: must be 2000..100000')
 
 
 def body(path):
@@ -622,6 +669,9 @@ def parser():
     c = add('decide'); c.add_argument('--file', required=True); c.add_argument('--task'); c.add_argument('--supersedes')
     c = add('journal'); c.add_argument('--task'); c.add_argument('--type', choices=['decision', 'milestone']); c.add_argument('--id'); c.add_argument('--limit', type=int, default=20); c.add_argument('--all', action='store_true'); c.add_argument('--render', action='store_true'); c.add_argument('--full', action='store_true'); c.add_argument('--max-chars', type=int, default=6000)
     add('check')
+    add('doctor')
+    c = add('new'); c.add_argument('dest', help='New project directory (must not exist)')
+    c.add_argument('--from', dest='source', help='Template checkout to clone (default: this one)')
     add('validate-config').add_argument('--config', required=True)
     c = add('update-config'); c.add_argument('--config', required=True); c.add_argument('--approved', action='store_true'); c.add_argument('--preview-hash')
     add('status').add_argument('--all', action='store_true')
@@ -675,6 +725,36 @@ def install_hooks():
         hook.chmod(hook.stat().st_mode | 0o111)
     subprocess.run(['git', 'config', 'core.hooksPath', 'githooks'], cwd=ROOT, check=True)
     return 'Git hooks installed (core.hooksPath=githooks).'
+
+
+def doctor_findings():
+    config = read(ROOT / '.workflow/config.json') if (ROOT / '.workflow/config.json').exists() else None
+    return doctor.checks(ROOT, config, AGENT_EXPLICIT)
+
+
+def new_project(args):
+    """Clone this (unconfigured) template into a new project directory."""
+    source = Path(args.source).expanduser().resolve() if args.source else ROOT
+    dest = Path(args.dest).expanduser().resolve()
+    require(doctor.git(source, 'rev-parse', '--is-inside-work-tree') == 'true', f'{source} is not a Git work tree')
+    require(not (source / '.workflow/config.json').exists(), f'{source} is a configured project, not the template')
+    require(not dest.exists(), f'{dest} already exists')
+    if doctor.git(source, 'status', '--porcelain'):
+        print(f'Warning: uncommitted changes in {source} are not copied; commit them first if needed.', file=sys.stderr)
+    subprocess.run(['git', 'clone', '-q', '--no-hardlinks', str(source), str(dest)], check=True)
+    run = lambda *a: subprocess.run(['git', *a], cwd=dest, check=True, capture_output=True)
+    # Keep the template reachable for pulling later fixes, but never as a push target.
+    run('remote', 'rename', 'origin', 'template')
+    run('config', 'remote.template.pushurl', 'no-push://template-is-read-only')
+    for key in ('user.name', 'user.email'):
+        value = doctor.git(source, 'config', '--local', '--get', key)
+        if value:
+            run('config', key, value)
+    run('config', 'core.hooksPath', 'githooks')
+    print(f'Created {dest} (remote "template" -> {source}, fetch only).\n'
+          f'Next: cd {dest}, start your assistant there (Claude Code loads its hooks only from the project root), '
+          'and run the configuration interview (CONFIGURE.md). Check setup with workflow.py doctor.')
+    return 0
 
 
 def update_config(args):
@@ -752,6 +832,7 @@ def update_config(args):
             task['data_question'] = previous_question
         artifact(task, 'prompts', f'Approved configuration update {revision.relative_to(ROOT)}; reassess data and validation before continuing.\n', 'md')
     dump(ROOT / '.workflow/config.json', candidate)
+    sync_gitignore(candidate)
     for name, content in new_guidance.items():
         write(ROOT / name, content)
     prune(removals)
@@ -779,16 +860,21 @@ def require_access(task, cmd):
             'work on your own task or wait for release/expiry')
 
 
-READ_ONLY = {'status', 'show', 'context', 'resume', 'validate-config', 'check'}
+READ_ONLY = {'status', 'show', 'context', 'resume', 'validate-config', 'check', 'doctor', 'new'}
 
 
 def main(argv=None):
-    global AGENT
+    global AGENT, AGENT_EXPLICIT
     args = parser().parse_args(argv)
     AGENT = coord.current_agent(args.agent)
+    AGENT_EXPLICIT = bool(args.agent or os.environ.get('WORKFLOW_AGENT'))
     if args.command == 'guard':
         import guard
         return guard.run(args, AGENT)
+    if (not AGENT_EXPLICIT and args.command not in READ_ONLY and args.command != 'journal'
+            and (ROOT / '.workflow/config.json').exists()):
+        print('Warning: WORKFLOW_AGENT is unset; recording this as agent "local". '
+              'Export WORKFLOW_AGENT or pass --agent.', file=sys.stderr)
     if (args.command in READ_ONLY or (args.command == 'journal' and not args.render)
             or (args.command == 'update-config' and not args.approved)):
         return dispatch(args)
@@ -817,7 +903,15 @@ def dispatch(args):
         return
     if cmd == 'validate-config':
         validate_config(read(args.config)); print('Configuration valid; no changes made.'); return
+    if cmd == 'doctor':
+        found = doctor_findings()
+        print(doctor.render(found))
+        return 2 if any(level == 'warn' for level, _ in found) else 0
+    if cmd == 'new':
+        return new_project(args)
     if cmd == 'install-hooks':
+        if (ROOT / '.workflow/config.json').exists():
+            sync_gitignore(read(ROOT / '.workflow/config.json'))
         print(install_hooks()); return
     if cmd == 'update-config':
         return update_config(args)
@@ -830,6 +924,7 @@ def dispatch(args):
         for name, content in guidance(c).items():
             write(ROOT / name, content)
         dump(ROOT / '.workflow/config.json', c)
+        sync_gitignore(c)
         save({'schema_version': VERSION, 'tasks': []})
         removals = prune_targets(c)
         prune(removals)
@@ -840,7 +935,8 @@ def dispatch(args):
                   evidence=['.workflow/config.json', 'PROJECT.md', 'AGENTS.md'])
         print('Configured. Read PROJECT.md and AGENTS.md. Generated: ' + (', '.join(generated) or 'no Claude subagents'))
         print('Pruned: ' + (', '.join(removals) or 'nothing'))
-        print(install_hooks()); return
+        print(install_hooks())
+        print('Setup check (workflow.py doctor):\n' + doctor.render(doctor_findings())); return
     config = read(ROOT / '.workflow/config.json'); validate_config(config)
     state = read(ROOT / '.workflow/state.json')
     require(state.get('schema_version') == VERSION, 'Old state schema; explicit migration required (do not overwrite history)')

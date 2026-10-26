@@ -25,15 +25,27 @@ The assistant supplies model access, delegation, and compaction.
 
 ## Configure
 
+Create the project from the template checkout, then start your assistant inside it
+(Claude Code loads the hooks only from the project root):
+
+```sh
+python3 scripts/workflow.py new ~/my-project   # clone; remote "template" is fetch-only
+cd ~/my-project
+```
+
+`new` keeps the template as a fetch-only `template` remote for pulling later fixes,
+copies the template's repo-local Git identity, and sets `core.hooksPath`. (Without
+`new`: copy the files, `git init`, and run `workflow.py install-hooks`.)
+
 Paste [the initialization primer](prompts/template_prompt_initialization.md) with
 its placeholders filled in, or ask the assistant to read AGENTS.md and configure the
 harness. It runs the [interview](CONFIGURE.md), then asks for approval:
 
 ```sh
-git init                      # if needed; configure installs the commit hook
 cp templates/config.json project-config.json   # fill in the agreed answers
 python3 scripts/workflow.py validate-config --config project-config.json
-python3 scripts/workflow.py configure --config project-config.json --approved
+python3 scripts/workflow.py configure --config project-config.json --approved --assumed assumed.md
+python3 scripts/workflow.py doctor     # hooks, identities, template remote, fixtures
 ```
 
 List unused template components in `prune` (see CONFIGURE.md, "Template
@@ -41,14 +53,18 @@ cleanup"); configure deletes them so the project carries only what it uses.
 
 Configuring writes PROJECT.md, the project AGENTS.md, `.workflow/config.json`,
 the task board, and `.claude/agents/*.md` generated from the role definitions, and
-sets `core.hooksPath=githooks`. The approval flag records the coordinator's
-assertion of consent; it cannot authenticate the user.
+sets `core.hooksPath=githooks`. It also writes a generated block at the end of
+`.gitignore` that un-ignores `data.approved_fixtures` (`update-config` keeps it in
+sync, `install-hooks` regenerates it, and the commit hook rejects a stale block).
+The approval flag records the coordinator's assertion of consent; it cannot
+authenticate the user. `validate-config` lists every structural problem at once.
 
 ## Agents side by side
 
 Each agent sets an identity: Claude Code gets `WORKFLOW_AGENT=claude` from
 `.claude/settings.json`. For Codex, export `WORKFLOW_AGENT=codex` in its
-environment (or pass `--agent codex`). Unset means `local`.
+environment (or pass `--agent codex`). Unset means `local`, and mutating commands
+warn about it; `doctor` reports it too.
 
 ```sh
 python3 scripts/workflow.py add --title 'API endpoint' --criterion 'GET /items works' \

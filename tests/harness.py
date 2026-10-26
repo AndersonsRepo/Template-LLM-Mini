@@ -65,8 +65,13 @@ class HarnessTestCase(unittest.TestCase):
         path.write_text(json.dumps(data) if not isinstance(data, str) else data)
 
     def run_cli(self, *args, success=True, agent='claude', stdin=None, code=None):
-        env = dict(os.environ, WORKFLOW_AGENT=agent, WORKFLOW_LOCK_TIMEOUT='10')
+        env = dict(os.environ, WORKFLOW_LOCK_TIMEOUT='10')
         env.pop('WORKFLOW_ROLE', None)
+        env.pop('CLAUDE_PROJECT_DIR', None)
+        if agent is None:  # Simulate an unset identity.
+            env.pop('WORKFLOW_AGENT', None)
+        else:
+            env['WORKFLOW_AGENT'] = agent
         result = subprocess.run([sys.executable, str(self.root / 'scripts/workflow.py'), *args],
                                 cwd=self.root, text=True, capture_output=True, env=env, input=stdin)
         if code is not None:

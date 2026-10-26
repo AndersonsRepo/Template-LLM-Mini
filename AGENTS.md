@@ -7,6 +7,8 @@ configured. Until then:
   configuration; hooks enforce the mechanical ones.
 - Initialization primer request: show prompts/template_prompt_initialization.md in
   full, keeping its <placeholders>; showing it does not execute it.
+- Projects start from a copy: `workflow.py new DEST` clones this template with a
+  fetch-only `template` remote. Configure the copy, not the template checkout.
 - To configure: read CONFIGURE.md and templates/config.json. Present every
   interview topic at once, with recommended defaults, and resolve missing or
   ambiguous answers. Then present the brief, configuration, proposed changes, and

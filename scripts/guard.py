@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 import coordination as coord
+import doctor
 import roles
 import workflow as wf
 
@@ -133,6 +134,11 @@ def commit_issues():
         new = git('show', f':{journal}')
         if new.returncode or not new.stdout.startswith(old.stdout):
             issues.append(f'{journal} must only grow; append corrections with `workflow.py decide --supersedes`.')
+    if config and '.gitignore' in names:
+        staged = git('show', ':.gitignore').stdout.decode('utf-8', 'replace')
+        if wf.gitignore_with_fixtures(staged, config) != staged:
+            issues.append('.gitignore: the approved_fixtures block must match data.approved_fixtures; '
+                          'run `workflow.py install-hooks` to regenerate it.')
     for name in names:
         parts = Path(name).parts
         if parts[0] == 'data' and Path(name).name != '.gitkeep' and name not in fixtures:
@@ -159,6 +165,8 @@ def session_text(agent, source=None):
         lines.append('This template is unconfigured: read AGENTS.md before doing anything else.')
         return '\n'.join(lines)
     lines.append(f'Project: {config["project"]["name"]} - {config["project"]["purpose"]}')
+    explicit = bool(os.environ.get('WORKFLOW_AGENT')) or agent != 'local'
+    lines += [f'Setup warning: {message}' for level, message in doctor.checks(wf.ROOT, config, explicit) if level == 'warn']
     active = [t for t in state['tasks'] if t['status'] != 'done']
     lines.append('Board:' if active else 'Board: no active tasks.')
     for t in active:
