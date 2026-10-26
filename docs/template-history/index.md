@@ -11,3 +11,4 @@ These records describe the template before project customization, not live tasks
 - [Data-analysis hardening](features/007-data-analysis-hardening.md)
 - [Running decision journal](features/008-decision-journal.md)
 - [Journal refinements](features/009-journal-refinements.md)
+- [Configuration-trial fixes](memories/011-configuration-trial-fixes.md)
